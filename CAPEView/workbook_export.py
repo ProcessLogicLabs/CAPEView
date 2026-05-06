@@ -52,7 +52,10 @@ MAIN_REPORT_HEADERS = [
     "Line Tariff Goods Value Amount", "Line Tariff Duty Amount",
 ]
 
-CLAIM_HEADERS = ["ENTRY_NUMBER", "CLAIM_NUMBER", "STATUS", "ERROR_DESCRIPTION"]
+CLAIM_HEADERS = [
+    "ENTRY_NUMBER", "CLAIM_NUMBER", "STATUS", "ERROR_DESCRIPTION",
+    "NOTES", "MANUAL_OVERRIDE", "UPDATED_BY", "UPDATED_AT",
+]
 
 
 HEADER_FILL = PatternFill(start_color="4E8C9B", end_color="4E8C9B", fill_type="solid")
@@ -135,7 +138,10 @@ def _write_claim_details(ws, conn):
     ws.append(CLAIM_HEADERS)
     _style_header_row(ws, len(CLAIM_HEADERS))
     rows = conn.execute(
-        "SELECT entry_summary_number, claim_number, status, error_description "
+        "SELECT entry_summary_number, claim_number, status, error_description, "
+        "       COALESCE(notes,''), "
+        "       CASE WHEN manual_override = 1 THEN 'Y' ELSE '' END, "
+        "       COALESCE(updated_by,''), COALESCE(updated_at,'') "
         "FROM claims ORDER BY last_seen DESC"
     )
     count = 0

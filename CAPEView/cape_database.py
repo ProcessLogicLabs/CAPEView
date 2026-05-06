@@ -132,6 +132,17 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_actions_entry          ON entry_actions(entry_summary_number);",
 ]
 
+# Idempotent column additions for upgrading existing databases. Each tuple:
+#   (table, column_name, column_definition)
+# We try ADD COLUMN and swallow the "duplicate column" error so init_db stays
+# idempotent without a separate version-tracking layer.
+COLUMN_ADDITIONS = [
+    ("claims", "notes",            "TEXT"),
+    ("claims", "manual_override",  "INTEGER NOT NULL DEFAULT 0"),
+    ("claims", "updated_at",       "TEXT"),
+    ("claims", "updated_by",       "TEXT"),
+]
+
 
 def resolve_db_path() -> Path:
     """Return the active DB path. Order: env var > shared share (if reachable) > local."""
@@ -172,13 +183,22 @@ def transaction(conn: sqlite3.Connection):
 
 
 def init_db(conn: sqlite3.Connection | None = None) -> sqlite3.Connection:
-    """Create tables and indices if missing. Idempotent."""
+    """Create tables and indices if missing, then apply additive ALTERs. Idempotent."""
     own_conn = conn is None
     conn = conn or connect()
     try:
         with transaction(conn):
             for stmt in SCHEMA_STATEMENTS:
                 conn.execute(stmt)
+        # ALTER TABLE ADD COLUMN cannot run inside a transaction in SQLite; run
+        # each one outside, swallowing the "duplicate column" error to stay
+        # idempotent.
+        for table, col, defn in COLUMN_ADDITIONS:
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {defn};")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
         return conn
     finally:
         if own_conn and conn is not None:
@@ -195,10 +215,14 @@ def now_iso() -> str:
 # ----------------------------------------------------------------------
 
 def upsert_claims(conn: sqlite3.Connection, rows: list[dict]) -> tuple[int, int]:
-    """Upsert claim rows. Returns (inserted, updated).
+    """Upsert claim rows from a CSV ingest. Returns (inserted, updated).
 
     Each row needs keys: entry_summary_number, claim_number, status, error_description.
-    Preserves first_seen on update; bumps last_seen.
+
+    If an existing row's ``manual_override`` flag is 1, the user-edited
+    ``status`` / ``error_description`` / ``notes`` values are preserved and
+    only ``last_seen`` is bumped. This lets compliance officers correct a row
+    without losing their edit on the next CSV cycle.
     """
     inserted = 0
     updated = 0
@@ -206,27 +230,79 @@ def upsert_claims(conn: sqlite3.Connection, rows: list[dict]) -> tuple[int, int]
     with transaction(conn):
         for row in rows:
             existing = conn.execute(
-                "SELECT 1 FROM claims WHERE entry_summary_number = ? AND claim_number = ?",
+                "SELECT manual_override FROM claims "
+                "WHERE entry_summary_number = ? AND claim_number = ?",
                 (row["entry_summary_number"], row["claim_number"]),
             ).fetchone()
             if existing:
-                conn.execute(
-                    """UPDATE claims SET status = ?, error_description = ?, last_seen = ?
-                       WHERE entry_summary_number = ? AND claim_number = ?""",
-                    (row.get("status"), row.get("error_description"), ts,
-                     row["entry_summary_number"], row["claim_number"]),
-                )
+                if existing[0]:
+                    # Manually overridden — only refresh last_seen
+                    conn.execute(
+                        "UPDATE claims SET last_seen = ? "
+                        "WHERE entry_summary_number = ? AND claim_number = ?",
+                        (ts, row["entry_summary_number"], row["claim_number"]),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE claims SET status = ?, error_description = ?, last_seen = ? "
+                        "WHERE entry_summary_number = ? AND claim_number = ?",
+                        (row.get("status"), row.get("error_description"), ts,
+                         row["entry_summary_number"], row["claim_number"]),
+                    )
                 updated += 1
             else:
                 conn.execute(
-                    """INSERT INTO claims (entry_summary_number, claim_number, status,
-                                           error_description, first_seen, last_seen)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    "INSERT INTO claims (entry_summary_number, claim_number, status, "
+                    " error_description, first_seen, last_seen) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
                     (row["entry_summary_number"], row["claim_number"], row.get("status"),
                      row.get("error_description"), ts, ts),
                 )
                 inserted += 1
     return inserted, updated
+
+
+def update_claim_field(
+    conn: sqlite3.Connection,
+    entry_summary_number: str,
+    claim_number: str,
+    field: str,
+    new_value: str | None,
+    user_id: str,
+) -> bool:
+    """User-driven edit of a claim field. Sets ``manual_override = 1`` and
+    appends an ``audit_log`` row. Returns True if a row was updated.
+
+    Allowed fields: status, error_description, notes.
+    """
+    if field not in ("status", "error_description", "notes"):
+        raise ValueError(f"field {field!r} is not user-editable")
+
+    cur = conn.execute(
+        f"SELECT {field} FROM claims WHERE entry_summary_number = ? AND claim_number = ?",
+        (entry_summary_number, claim_number),
+    ).fetchone()
+    if cur is None:
+        return False
+    old_value = cur[0]
+    if old_value == new_value:
+        return False
+    ts = now_iso()
+    with transaction(conn):
+        conn.execute(
+            f"UPDATE claims SET {field} = ?, manual_override = 1, "
+            f"  updated_at = ?, updated_by = ? "
+            f"WHERE entry_summary_number = ? AND claim_number = ?",
+            (new_value, ts, user_id, entry_summary_number, claim_number),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (user_id, table_name, row_key, field, "
+            " old_value, new_value, changed_at) "
+            "VALUES (?, 'claims', ?, ?, ?, ?, ?)",
+            (user_id, f"{entry_summary_number}|{claim_number}", field,
+             old_value, new_value, ts),
+        )
+    return True
 
 
 def upsert_entries(conn: sqlite3.Connection, rows: list[dict]) -> tuple[int, int]:

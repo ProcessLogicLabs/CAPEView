@@ -12,6 +12,7 @@ QSS (Qt's native Windows style ignores QPalette for QHeaderView), row coloring.
 
 from __future__ import annotations
 
+import getpass
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -67,6 +68,14 @@ URGENCY_DUE_30  = QColor(252, 235, 196)   # amber
 URGENCY_DUE_60  = QColor(252, 246, 220)   # pale amber
 URGENCY_OK      = QColor(220, 240, 226)   # soft green
 URGENCY_NEUTRAL = None
+
+
+def _current_user() -> str:
+    """Best-effort user attribution for audit_log. Auth wiring will replace this."""
+    try:
+        return getpass.getuser() or "local"
+    except Exception:
+        return "local"
 
 
 _ISO_DATE_RE     = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
@@ -318,8 +327,18 @@ class EntriesView(SQLTableView):
 
 
 class ClaimsView(SQLTableView):
+    """Claims table — Status / Error Description / Notes are user-editable.
+
+    Edits set ``manual_override = 1`` so the next CSV ingest preserves the
+    edit instead of clobbering it. Every change appends an ``audit_log`` row
+    keyed by ``entry_summary_number|claim_number``.
+    """
+
     title = "Claims"
-    headers = ["Entry Summary #", "Claim #", "Status", "Error Description", "First Seen", "Last Seen"]
+    headers = [
+        "Entry Summary #", "Claim #", "Status", "Error Description",
+        "Notes", "Manual", "First Seen", "Last Seen",
+    ]
     placeholder = "Filter by entry, claim, or error..."
     status_filters = [
         FilterSpec(
@@ -328,20 +347,46 @@ class ClaimsView(SQLTableView):
              ("Updated", "Entry Summary Updated"),
              ("Failed", "Failed")],
         ),
+        FilterSpec(
+            "Manual edits", "manual_override",
+            [("Any", None), ("Edited only", 1), ("Untouched only", 0)],
+        ),
     ]
 
+    # Column indices that are user-editable (Status, Error Description, Notes)
+    EDITABLE_COLUMNS = (2, 3, 4)
+    # Maps column index -> claims-table field name (for the SQL UPDATE)
+    EDITABLE_FIELD = {2: "status", 3: "error_description", 4: "notes"}
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # Hook the model edit signal AFTER the base class created self.table
+        self.table.itemChanged.connect(self._on_item_changed)
+        self._suppress_changes = False
+
     def build_query(self, filter_text, status_filters):
-        sql = "SELECT entry_summary_number, claim_number, status, error_description, first_seen, last_seen FROM claims WHERE 1=1 "
+        sql = (
+            "SELECT entry_summary_number, claim_number, status, error_description, "
+            "       COALESCE(notes,''), "
+            "       CASE WHEN manual_override = 1 THEN 'Y' ELSE '' END, "
+            "       first_seen, last_seen "
+            "FROM claims WHERE 1=1 "
+        )
         params: list = []
         status_val = status_filters.get("status")
         if status_val is not None:
             sql += "AND status = ? "
             params.append(status_val)
+        manual_val = status_filters.get("manual_override")
+        if manual_val is not None:
+            sql += "AND manual_override = ? "
+            params.append(int(manual_val))
         if filter_text:
             sql += ("AND (entry_summary_number LIKE ? OR claim_number LIKE ? "
-                    "     OR COALESCE(error_description,'') LIKE ?) ")
+                    "     OR COALESCE(error_description,'') LIKE ? "
+                    "     OR COALESCE(notes,'') LIKE ?) ")
             like = f"%{filter_text}%"
-            params.extend([like, like, like])
+            params.extend([like, like, like, like])
         sql += f"ORDER BY last_seen DESC LIMIT {self.row_limit}"
         return sql, tuple(params)
 
@@ -352,6 +397,68 @@ class ClaimsView(SQLTableView):
         if status == "ENTRY SUMMARY UPDATED":
             return URGENCY_OK
         return None
+
+    # ----- editable behavior --------------------------------------------------
+    def refresh(self):
+        """Suppress itemChanged while we repopulate the table; otherwise the
+        bulk insertion would fire a write per cell."""
+        self._suppress_changes = True
+        try:
+            super().refresh()
+            for r in range(self.table.rowCount()):
+                for c in range(self.table.columnCount()):
+                    item = self.table.item(r, c)
+                    if item is None:
+                        continue
+                    flags = item.flags()
+                    if c in self.EDITABLE_COLUMNS:
+                        item.setFlags(flags | Qt.ItemIsEditable)
+                    else:
+                        item.setFlags(flags & ~Qt.ItemIsEditable)
+        finally:
+            self._suppress_changes = False
+
+    def _on_item_changed(self, item: QTableWidgetItem):
+        if self._suppress_changes:
+            return
+        col = item.column()
+        if col not in self.EDITABLE_COLUMNS:
+            return
+        row = item.row()
+        esn_item = self.table.item(row, 0)
+        claim_item = self.table.item(row, 1)
+        if esn_item is None or claim_item is None:
+            return
+        field = self.EDITABLE_FIELD[col]
+        new_value = item.text() or None
+
+        try:
+            conn = db.connect()
+            db.init_db(conn)
+            updated = db.update_claim_field(
+                conn,
+                entry_summary_number=esn_item.text(),
+                claim_number=claim_item.text(),
+                field=field,
+                new_value=new_value,
+                user_id=_current_user(),
+            )
+            conn.close()
+        except Exception as e:
+            self.status.setText(f"Save failed: {e}")
+            return
+
+        if updated:
+            self.status.setText(
+                f"Saved {field} on {esn_item.text()}/{claim_item.text()} "
+                f"(by {_current_user()})"
+            )
+            # Reflect manual_override='Y' immediately without a full refresh
+            manual_item = self.table.item(row, 5)
+            if manual_item is not None:
+                self._suppress_changes = True
+                manual_item.setText("Y")
+                self._suppress_changes = False
 
 
 class ComplianceView(SQLTableView):
