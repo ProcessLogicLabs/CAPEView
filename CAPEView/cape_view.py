@@ -18,8 +18,10 @@ if sys.platform == "win32":
     if hwnd:
         user32.ShowWindow(hwnd, 0)
 
+from pathlib import Path
+
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QIcon
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
@@ -163,6 +165,13 @@ def main():
 
     apply_theme(app)
     app.setFont(QFont("Segoe UI", 10))
+
+    # Window/taskbar icon — looked up relative to this module so it works
+    # both in dev and inside the PyInstaller bundle (where Resources/ is
+    # included alongside the package).
+    icon_path = Path(__file__).resolve().parent / "Resources" / "icon.ico"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     splash = AnimatedMillSplash(APP_NAME, VERSION.lstrip("v"))
     splash.show()

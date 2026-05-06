@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CAPEView icon — 512x512 round badge in the OCRMill family style.
+  Classic two-winged cape silhouette: collar + bell-shaped flowing body
+  with a center pleat and a wave hem. Designed to read at 16px and up.
+  Edit this file, then re-run scripts/make_icon.py to regenerate icon.ico.
+-->
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  style="stop-color:#5FA5B4;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#3C7080;stop-opacity:1"/>
+    </linearGradient>
+    <linearGradient id="cyanInner" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  style="stop-color:#7DB7C2;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#4E8C9B;stop-opacity:1"/>
+    </linearGradient>
+    <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <!-- White outer disk with drop shadow -->
+  <circle cx="256" cy="256" r="240" fill="#ffffff" filter="url(#dropShadow)"/>
+
+  <!-- Cyan outer ring -->
+  <circle cx="256" cy="256" r="232" fill="none" stroke="url(#cyanGrad)" stroke-width="16"/>
+
+  <!-- Inner muted-cyan badge -->
+  <circle cx="256" cy="256" r="184" fill="url(#cyanInner)"/>
+
+  <!-- Cape: collar yoke + wide sweeping body with a wave hem -->
+  <g fill="#ffffff">
+    <!-- Collar yoke (rounded rectangle) -->
+    <rect x="216" y="160" width="80" height="26" rx="9" ry="9"/>
+
+    <!-- Body: two wings flaring out, with a v-notch and wave hem.
+         Drawn clockwise starting at the lower-left of the collar. -->
+    <path d="
+      M 220 186
+      Q 168 220 122 360
+      Q 130 376 156 374
+      Q 188 366 220 376
+      Q 234 358 248 372
+      Q 256 384 264 372
+      Q 278 358 292 376
+      Q 324 366 356 374
+      Q 382 376 390 360
+      Q 344 220 292 186
+      Z"/>
+
+    <!-- Center pleat line for depth -->
+    <path d="M 256 188 L 256 376"
+          stroke="#4E8C9B" stroke-width="3" stroke-linecap="round"
+          fill="none" opacity="0.4"/>
+
+    <!-- Side fold lines (suggest fabric drape) -->
+    <g stroke="#4E8C9B" stroke-width="3" fill="none"
+       stroke-linecap="round" opacity="0.30">
+      <path d="M 216 200 Q 196 270 192 360"/>
+      <path d="M 296 200 Q 316 270 320 360"/>
+    </g>
+  </g>
+
+  <!-- Cardinal-point accent dots -->
+  <circle cx="256" cy="56"  r="11" fill="url(#cyanGrad)"/>
+  <circle cx="256" cy="456" r="11" fill="url(#cyanGrad)"/>
+  <circle cx="56"  cy="256" r="11" fill="url(#cyanGrad)"/>
+  <circle cx="456" cy="256" r="11" fill="url(#cyanGrad)"/>
+</svg>
