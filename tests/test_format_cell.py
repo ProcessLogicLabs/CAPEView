@@ -5,7 +5,7 @@ import pytest
 # Skip if PyQt5 isn't installed (CI installs it via requirements.txt)
 pytest.importorskip("PyQt5")
 
-from CAPEView.views.table_view import format_cell
+from CAPEView.views.table_view import format_cell, format_usd
 
 
 @pytest.mark.parametrize("value,expected", [
@@ -26,3 +26,21 @@ from CAPEView.views.table_view import format_cell
 ])
 def test_format_cell(value, expected):
     assert format_cell(value) == expected
+
+
+@pytest.mark.parametrize("value,expected", [
+    (None,                ""),
+    ("",                  ""),
+    (0,                   "$0.00"),
+    (0.0,                 "$0.00"),
+    (1,                   "$1.00"),
+    (1.5,                 "$1.50"),
+    (1234.56,             "$1,234.56"),
+    (26352732.57,         "$26,352,732.57"),
+    ("13501457.17",       "$13,501,457.17"),
+    (-100,                "-$100.00"),
+    (-26352732.57,        "-$26,352,732.57"),
+    ("not a number",      "not a number"),
+])
+def test_format_usd(value, expected):
+    assert format_usd(value) == expected

@@ -98,6 +98,18 @@ def format_cell(value) -> str:
     return s
 
 
+def format_usd(value) -> str:
+    """Render a numeric as USD currency (e.g. ``$26,352,732.57``)."""
+    if value is None or value == "":
+        return ""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    sign = "-" if n < 0 else ""
+    return f"{sign}${abs(n):,.2f}"
+
+
 def deadline_urgency(deadline_iso: str | None, today: date | None = None) -> QColor | None:
     """Return a tint based on how close ``deadline_iso`` (YYYY-MM-DD) is to ``today``."""
     if not deadline_iso:
@@ -128,6 +140,8 @@ class SQLTableView(QWidget):
     placeholder = "Search..."
     status_filters: list[FilterSpec] = []  # subclasses may override
     row_limit = 1000
+    # Column indices that should be rendered as USD currency (right-aligned).
+    currency_columns: list[int] = []
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -247,7 +261,11 @@ class SQLTableView(QWidget):
             for r, row in enumerate(rows):
                 tint = self.color_row(tuple(row))
                 for c, val in enumerate(row):
-                    item = QTableWidgetItem(format_cell(val))
+                    if c in self.currency_columns:
+                        item = QTableWidgetItem(format_usd(val))
+                        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    else:
+                        item = QTableWidgetItem(format_cell(val))
                     if tint is not None:
                         item.setBackground(QBrush(tint))
                     self.table.setItem(r, c, item)
@@ -294,6 +312,7 @@ class EntriesView(SQLTableView):
         "Liq Status", "Liq Date", "CAPE LIQ Deadline", "Total Liq Duty",
     ]
     placeholder = "Filter by importer or entry #..."
+    currency_columns = [8]  # Total Liq Duty
     status_filters = [
         FilterSpec("CAPE Eligible", "cape_eligible", YN_TEXT_OPTIONS),
     ] + _importer_filters()
@@ -591,6 +610,7 @@ class RefundsView(SQLTableView):
     title = "Refund Estimate (CAPE-eligible duty paid)"
     headers = ["Importer Name", "Liq Status", "CAPE Phase 1", "Σ Line Duty", "Entries", "Lines"]
     placeholder = "Filter by importer name..."
+    currency_columns = [3]  # Σ Line Duty
     status_filters = [
         FilterSpec("CAPE Eligible", "cape_eligible", YN_TEXT_OPTIONS, default="Y"),
     ] + _importer_filters()
