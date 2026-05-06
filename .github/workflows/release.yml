@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Resolve version from tag
+        id: ver
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}"          >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}"  >> "$GITHUB_OUTPUT"
+
+      - name: Inject version into version.py
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.ver.outputs.tag }}"
+          (Get-Content CAPEView/version.py) `
+            -replace '__fallback_version__\s*=\s*".*"', "__fallback_version__ = `"$tag`"" `
+            | Set-Content CAPEView/version.py
+          Get-Content CAPEView/version.py | Select-String -Pattern '__fallback_version__'
+
+      - name: Build with PyInstaller
+        run: pyinstaller --noconfirm --clean CAPEView.spec
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc /dMyAppVersion=${{ steps.ver.outputs.version }} CAPEView_setup.iss
+
+      - name: Compute SHA256SUMS
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem installer_output\CAPEView_Setup_*.exe | Select-Object -First 1
+          if (-not $installer) { throw "Installer not found" }
+          Get-FileHash -Algorithm SHA256 $installer.FullName |
+            ForEach-Object { "$($_.Hash.ToLower())  $($installer.Name)" } |
+            Set-Content -Path installer_output/SHA256SUMS.txt -Encoding ascii
+          Get-Content installer_output/SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "CAPEView ${{ steps.ver.outputs.tag }}"
+          body: |
+            CAPEView ${{ steps.ver.outputs.tag }}
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+          draft: false
+          prerelease: false
+          files: |
+            installer_output/CAPEView_Setup_${{ steps.ver.outputs.version }}.exe
+            installer_output/SHA256SUMS.txt
