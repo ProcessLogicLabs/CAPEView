@@ -75,26 +75,32 @@ def _write_entry_count(ws, conn):
     ws.append(ENTRY_COUNT_HEADERS)
     _style_header_row(ws, len(ENTRY_COUNT_HEADERS))
 
+    # Render the 0/1 flag columns as Y / N to match the legacy xlsx.
+    yn = ("CASE WHEN {col} = 1 THEN 'Y' "
+          "     WHEN {col} = 0 THEN 'N' ELSE NULL END")
     rows = conn.execute(
-        """SELECT e.entry_summary_number, e.div, e.cape_phase1_eligible,
-                  i.self_filer, i.ace_account, i.ach_details_in_ace,
-                  i.is_4811_client, i.psc_for_4811,
-                  c.claim_number, c.status, c.error_description,
-                  e.entry_type_code, e.importer_number, e.importer_name,
-                  e.port_of_entry_code, e.entry_date, e.entry_summary_date,
-                  e.initial_es_create_date, e.reconciliation_indicator,
-                  e.control_status, e.psc_indicator, e.liquidation_date,
-                  e.liquidation_status, e.final_liquidation_date,
-                  CASE WHEN e.final_liquidation_date IS NOT NULL
-                       AND date(e.final_liquidation_date) <= date('now')
-                       THEN 'Y' ELSE 'N' END,
-                  e.cape_liq_deadline, e.protest_number, e.protest_status,
-                  e.review_team_number, e.country_of_origin_code,
-                  e.country_of_export_code, e.total_liquidated_duty
-           FROM entries e
-           LEFT JOIN importer_status i ON i.importer_number = e.importer_number
-           LEFT JOIN claims c ON c.entry_summary_number = e.entry_summary_number
-           ORDER BY e.cape_liq_deadline IS NULL, e.cape_liq_deadline ASC""",
+        f"""SELECT e.entry_summary_number, e.div, e.cape_phase1_eligible,
+                   {yn.format(col='i.self_filer')},
+                   {yn.format(col='i.ace_account')},
+                   {yn.format(col='i.ach_details_in_ace')},
+                   {yn.format(col='i.is_4811_client')},
+                   {yn.format(col='i.psc_for_4811')},
+                   c.claim_number, c.status, c.error_description,
+                   e.entry_type_code, e.importer_number, e.importer_name,
+                   e.port_of_entry_code, e.entry_date, e.entry_summary_date,
+                   e.initial_es_create_date, e.reconciliation_indicator,
+                   e.control_status, e.psc_indicator, e.liquidation_date,
+                   e.liquidation_status, e.final_liquidation_date,
+                   CASE WHEN e.final_liquidation_date IS NOT NULL
+                        AND date(e.final_liquidation_date) <= date('now')
+                        THEN 'Y' ELSE 'N' END,
+                   e.cape_liq_deadline, e.protest_number, e.protest_status,
+                   e.review_team_number, e.country_of_origin_code,
+                   e.country_of_export_code, e.total_liquidated_duty
+            FROM entries e
+            LEFT JOIN importer_status i ON i.importer_number = e.importer_number
+            LEFT JOIN claims c ON c.entry_summary_number = e.entry_summary_number
+            ORDER BY e.cape_liq_deadline IS NULL, e.cape_liq_deadline ASC""",
     )
     count = 0
     for r in rows:

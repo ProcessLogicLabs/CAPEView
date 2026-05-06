@@ -110,6 +110,21 @@ def format_usd(value) -> str:
     return f"{sign}${abs(n):,.2f}"
 
 
+def format_flag(value) -> str:
+    """Render a 0/1 INTEGER flag as Y / N (matching the legacy xlsx)."""
+    if value is None or value == "":
+        return ""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if n == 1:
+        return "Y"
+    if n == 0:
+        return "N"
+    return str(value)
+
+
 def deadline_urgency(deadline_iso: str | None, today: date | None = None) -> QColor | None:
     """Return a tint based on how close ``deadline_iso`` (YYYY-MM-DD) is to ``today``."""
     if not deadline_iso:
@@ -142,6 +157,8 @@ class SQLTableView(QWidget):
     row_limit = 1000
     # Column indices that should be rendered as USD currency (right-aligned).
     currency_columns: list[int] = []
+    # Column indices that hold 0/1 INTEGER flags to render as Y / N.
+    flag_columns: list[int] = []
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -264,6 +281,9 @@ class SQLTableView(QWidget):
                     if c in self.currency_columns:
                         item = QTableWidgetItem(format_usd(val))
                         item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    elif c in self.flag_columns:
+                        item = QTableWidgetItem(format_flag(val))
+                        item.setTextAlignment(Qt.AlignCenter)
                     else:
                         item = QTableWidgetItem(format_cell(val))
                     if tint is not None:
@@ -520,6 +540,7 @@ class ImportersView(SQLTableView):
         "PSC for 4811", "Last Synced",
     ]
     placeholder = "Filter by importer name or number..."
+    flag_columns = [2, 3, 4, 5, 6]  # Self Filer, ACE, ACH, 4811 Client, PSC
     status_filters = _importer_filters()
 
     def build_query(self, filter_text, status_filters):

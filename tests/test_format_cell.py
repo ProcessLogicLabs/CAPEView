@@ -5,7 +5,7 @@ import pytest
 # Skip if PyQt5 isn't installed (CI installs it via requirements.txt)
 pytest.importorskip("PyQt5")
 
-from CAPEView.views.table_view import format_cell, format_usd
+from CAPEView.views.table_view import format_cell, format_flag, format_usd
 
 
 @pytest.mark.parametrize("value,expected", [
@@ -44,3 +44,19 @@ def test_format_cell(value, expected):
 ])
 def test_format_usd(value, expected):
     assert format_usd(value) == expected
+
+
+@pytest.mark.parametrize("value,expected", [
+    (None,    ""),
+    ("",      ""),
+    (1,       "Y"),
+    (0,       "N"),
+    ("1",     "Y"),
+    ("0",     "N"),
+    (True,    "Y"),
+    (False,   "N"),
+    (2,       "2"),       # unexpected value -> render as-is
+    ("Y",     "Y"),       # legacy text already in Y/N form
+])
+def test_format_flag(value, expected):
+    assert format_flag(value) == expected
