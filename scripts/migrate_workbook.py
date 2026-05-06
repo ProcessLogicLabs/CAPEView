@@ -135,6 +135,79 @@ def load_main_report(ws) -> list[dict]:
     return rows
 
 
+def load_importer_status(ws) -> list[dict]:
+    """Aggregate importer-status flags (cols D..H) per importer_number from Entry Count.
+
+    The legacy workbook stored these flags inline on each entry row. We collapse
+    them into one row per importer, taking any non-null value seen for each flag.
+    """
+    aggregates: dict[str, dict] = {}
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if not row or row[12] is None:  # importer_number lives in col M (idx 12)
+            continue
+        importer_number = str(row[12]).strip()
+        if not importer_number:
+            continue
+        importer_name = (str(row[13]).strip() if row[13] is not None else None)
+        bucket = aggregates.setdefault(importer_number, {
+            "importer_number": importer_number,
+            "importer_name": importer_name,
+            "self_filer": None,
+            "ace_account": None,
+            "ach_details_in_ace": None,
+            "is_4811_client": None,
+            "psc_for_4811": None,
+        })
+        if importer_name and not bucket["importer_name"]:
+            bucket["importer_name"] = importer_name
+
+        for db_key, col_idx in (
+            ("self_filer", 3), ("ace_account", 4), ("ach_details_in_ace", 5),
+            ("is_4811_client", 6), ("psc_for_4811", 7),
+        ):
+            flag = _to_int_flag(row[col_idx])
+            # Prefer Y over N over None: a single Y wins.
+            if flag == 1:
+                bucket[db_key] = 1
+            elif flag == 0 and bucket[db_key] is None:
+                bucket[db_key] = 0
+    return list(aggregates.values())
+
+
+def upsert_importer_status(conn, rows: list[dict]) -> tuple[int, int]:
+    """Idempotent upsert into importer_status."""
+    ts = db.now_iso()
+    inserted = 0
+    updated = 0
+    cols = [
+        "importer_number", "importer_name", "self_filer", "ace_account",
+        "ach_details_in_ace", "is_4811_client", "psc_for_4811",
+    ]
+    update_cols = ", ".join(f"{c} = ?" for c in cols[1:])
+    insert_sql = (
+        f"INSERT INTO importer_status ({', '.join(cols)}, last_synced_at) "
+        f"VALUES ({', '.join(['?'] * (len(cols) + 1))})"
+    )
+    update_sql = (
+        f"UPDATE importer_status SET {update_cols}, last_synced_at = ? "
+        f"WHERE importer_number = ?"
+    )
+    with db.transaction(conn):
+        for row in rows:
+            existing = conn.execute(
+                "SELECT 1 FROM importer_status WHERE importer_number = ?",
+                (row["importer_number"],),
+            ).fetchone()
+            values = [row.get(c) for c in cols]
+            if existing:
+                conn.execute(update_sql, values[1:] + [ts, row["importer_number"]])
+                updated += 1
+            else:
+                conn.execute(insert_sql, values + [ts])
+                inserted += 1
+    return inserted, updated
+
+
 def load_claim_details(ws) -> list[dict]:
     rows = []
     for row in ws.iter_rows(min_row=2, values_only=True):
@@ -187,11 +260,20 @@ def main():
 
     if "Entry Count" in wb.sheetnames:
         print("Reading 'Entry Count'...")
-        entries = load_entry_count(wb["Entry Count"])
+        ec_ws = wb["Entry Count"]
+
+        entries = load_entry_count(ec_ws)
         print(f"  {len(entries)} entry rows")
         ins, upd = db.upsert_entries(conn, entries)
-        print(f"  inserted={ins} updated={upd}")
+        print(f"  entries: inserted={ins} updated={upd}")
         db.record_import_run(conn, "migrate_workbook:entries",
+                             str(args.xlsx), ins, upd, started)
+
+        importers = load_importer_status(ec_ws)
+        print(f"  {len(importers)} distinct importers")
+        ins, upd = upsert_importer_status(conn, importers)
+        print(f"  importer_status: inserted={ins} updated={upd}")
+        db.record_import_run(conn, "migrate_workbook:importer_status",
                              str(args.xlsx), ins, upd, started)
 
     if "Main Report" in wb.sheetnames:

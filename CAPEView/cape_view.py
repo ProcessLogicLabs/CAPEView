@@ -39,7 +39,15 @@ from CAPEView.theme import apply_theme
 from CAPEView.version import get_version
 from CAPEView.views.dashboard import DashboardView
 from CAPEView.views.reports import ReportsView
-from CAPEView.views.table_view import ClaimsView, ComplianceView, EntriesView, ImportersView
+from CAPEView.views.table_view import (
+    ClaimsView,
+    ComplianceView,
+    DeadlinesView,
+    EntriesView,
+    ImportersView,
+    ProtestsView,
+    RefundsView,
+)
 
 APP_NAME = "CAPEView"
 VERSION = get_version()
@@ -64,16 +72,22 @@ class CAPEView(QMainWindow):
         self.tabs.setMovable(False)
 
         self.dashboard = DashboardView()
+        self.deadlines = DeadlinesView()
         self.entries = EntriesView()
         self.claims = ClaimsView()
         self.compliance = ComplianceView()
+        self.refunds = RefundsView()
+        self.protests = ProtestsView()
         self.importers = ImportersView()
         self.reports = ReportsView()
 
         self.tabs.addTab(self.dashboard, "Dashboard")
+        self.tabs.addTab(self.deadlines, "Deadlines")
         self.tabs.addTab(self.entries, "Entries")
         self.tabs.addTab(self.claims, "Claims")
         self.tabs.addTab(self.compliance, "Compliance")
+        self.tabs.addTab(self.refunds, "Refunds")
+        self.tabs.addTab(self.protests, "Protests")
         self.tabs.addTab(self.importers, "Importers")
         self.tabs.addTab(self.reports, "Reports")
         layout.addWidget(self.tabs)

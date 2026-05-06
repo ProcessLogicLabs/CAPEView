@@ -145,6 +145,79 @@ def _write_claim_details(ws, conn):
     return count
 
 
+def _write_refund_amount_pivot(ws, conn) -> int:
+    """Static grid replacing 'Refund Amount Pivot': Σ Line Tariff Duty by importer."""
+    ws.append([
+        "Importer Name", "Liq Status", "CAPE Phase 1", "Σ Line Duty", "Entries", "Lines",
+    ])
+    _style_header_row(ws, 6)
+    rows = conn.execute(
+        "SELECT e.importer_name, e.liquidation_status, e.cape_phase1_eligible, "
+        "       ROUND(SUM(COALESCE(l.line_tariff_duty, 0)), 2), "
+        "       COUNT(DISTINCT e.entry_summary_number), "
+        "       COUNT(l.line_number) "
+        "FROM entries e "
+        "LEFT JOIN entry_lines l ON l.entry_summary_number = e.entry_summary_number "
+        "WHERE UPPER(COALESCE(e.cape_phase1_eligible,'')) = 'Y' "
+        "GROUP BY e.importer_name, e.liquidation_status, e.cape_phase1_eligible "
+        "ORDER BY 4 DESC"
+    )
+    count = 0
+    for r in rows:
+        ws.append(list(r))
+        count += 1
+    return count
+
+
+def _write_protest_filing_pivot(ws, conn) -> int:
+    """Static grid replacing 'PROTEST FILING PIVOT': entries by importer × LIQ+180 week."""
+    ws.append([
+        "Final-Liq week", "Importer Name", "Entries", "Soonest Final-Liq", "Has CAPE Claim",
+    ])
+    _style_header_row(ws, 5)
+    rows = conn.execute(
+        "SELECT date(e.final_liquidation_date, 'weekday 0', '-6 days') AS week_start, "
+        "       e.importer_name, COUNT(*) AS n, "
+        "       MIN(e.final_liquidation_date), "
+        "       CASE WHEN COUNT(c.claim_number) > 0 THEN 'Y' ELSE 'N' END "
+        "FROM entries e "
+        "LEFT JOIN claims c ON c.entry_summary_number = e.entry_summary_number "
+        "WHERE e.final_liquidation_date IS NOT NULL "
+        "GROUP BY week_start, e.importer_name "
+        "ORDER BY week_start ASC, n DESC"
+    )
+    count = 0
+    for r in rows:
+        ws.append(list(r))
+        count += 1
+    return count
+
+
+def _write_entry_count_pivot(ws, conn) -> int:
+    """Static grid replacing 'Entry Count Pivot': entries by importer × CAPE LIQ deadline week."""
+    ws.append([
+        "Deadline week", "Importer Name", "Entries", "Soonest deadline", "Has CAPE Claim",
+    ])
+    _style_header_row(ws, 5)
+    rows = conn.execute(
+        "SELECT date(e.cape_liq_deadline, 'weekday 0', '-6 days') AS week_start, "
+        "       e.importer_name, COUNT(*) AS n, "
+        "       MIN(e.cape_liq_deadline), "
+        "       CASE WHEN COUNT(c.claim_number) > 0 THEN 'Y' ELSE 'N' END "
+        "FROM entries e "
+        "LEFT JOIN claims c ON c.entry_summary_number = e.entry_summary_number "
+        "WHERE e.cape_liq_deadline IS NOT NULL "
+        "  AND UPPER(COALESCE(e.cape_phase1_eligible,'')) = 'Y' "
+        "GROUP BY week_start, e.importer_name "
+        "ORDER BY week_start ASC, n DESC"
+    )
+    count = 0
+    for r in rows:
+        ws.append(list(r))
+        count += 1
+    return count
+
+
 def _write_parameters(ws, conn):
     ws["B1"] = "IEEPA DUTY PAID with LIQUIDATION DATE"
     ws["D1"] = "FOR OFFICIAL USE ONLY"
@@ -168,20 +241,34 @@ def export_cape_estimate(target: Path) -> dict:
     default = wb.active
     wb.remove(default)
 
-    ws_entries = wb.create_sheet("Entry Count")
-    ws_main = wb.create_sheet("Main Report")
-    ws_claims = wb.create_sheet("Claim details")
-    ws_params = wb.create_sheet("Parameters")
+    ws_refund   = wb.create_sheet("Refund Amount Pivot")
+    ws_main     = wb.create_sheet("Main Report")
+    ws_protest  = wb.create_sheet("PROTEST FILING PIVOT")
+    ws_ec_pivot = wb.create_sheet("Entry Count Pivot")
+    ws_entries  = wb.create_sheet("Entry Count")
+    ws_claims   = wb.create_sheet("Claim details")
+    ws_params   = wb.create_sheet("Parameters")
 
+    refund_n  = _write_refund_amount_pivot(ws_refund, conn)
+    main_n    = _write_main_report(ws_main, conn)
+    protest_n = _write_protest_filing_pivot(ws_protest, conn)
+    ec_pv_n   = _write_entry_count_pivot(ws_ec_pivot, conn)
     entries_n = _write_entry_count(ws_entries, conn)
-    main_n = _write_main_report(ws_main, conn)
-    claims_n = _write_claim_details(ws_claims, conn)
+    claims_n  = _write_claim_details(ws_claims, conn)
     _write_parameters(ws_params, conn)
 
     wb.save(target)
     conn.close()
 
-    return {"entries": entries_n, "entry_lines": main_n, "claims": claims_n, "path": str(target)}
+    return {
+        "entries": entries_n,
+        "entry_lines": main_n,
+        "claims": claims_n,
+        "refund_pivot_rows": refund_n,
+        "protest_pivot_rows": protest_n,
+        "entry_count_pivot_rows": ec_pv_n,
+        "path": str(target),
+    }
 
 
 if __name__ == "__main__":
