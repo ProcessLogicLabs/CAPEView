@@ -110,6 +110,58 @@ def format_usd(value) -> str:
     return f"{sign}${abs(n):,.2f}"
 
 
+class SortableItem(QTableWidgetItem):
+    """QTableWidgetItem that sorts by an explicit typed key, not display text.
+
+    Pass the raw SQL value as ``sort_key`` and the formatted display text as
+    ``text``. ``__lt__`` compares ``sort_key`` so dates, currency values, and
+    flag ints all sort correctly even when the user sees a formatted string.
+
+    NULL/None always sorts last (regardless of direction click). This matches
+    the legacy xlsx behavior of "blanks at the bottom".
+    """
+
+    __slots__ = ("_sort_key",)
+
+    def __init__(self, text: str, sort_key=None):
+        super().__init__(text)
+        self._sort_key = sort_key
+
+    def __lt__(self, other):
+        if not isinstance(other, SortableItem):
+            return super().__lt__(other)
+        a, b = self._sort_key, other._sort_key
+        # NULL/None goes to the end regardless of direction
+        if a is None and b is None:
+            return False
+        if a is None:
+            return False
+        if b is None:
+            return True
+        try:
+            return a < b
+        except TypeError:
+            return str(a) < str(b)
+
+
+def _to_float_or_none(v):
+    if v is None or v == "":
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_int_or_none(v):
+    if v is None or v == "":
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def format_flag(value) -> str:
     """Render a 0/1 INTEGER flag as Y / N (matching the legacy xlsx)."""
     if value is None or value == "":
@@ -220,6 +272,10 @@ class SQLTableView(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().setHighlightSections(False)
         self.table.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        # Click any column header to sort. SortableItem subclass below handles
+        # typed comparisons so currency / dates / flags don't sort lexically.
+        self.table.setSortingEnabled(True)
+        self.table.horizontalHeader().setSortIndicatorShown(True)
         self.table.setStyleSheet(
             "QHeaderView::section {"
             "  background-color: #4E8C9B;"
@@ -274,21 +330,29 @@ class SQLTableView(QWidget):
             )
             cur = conn.execute(sql, params)
             rows = cur.fetchall()
+            # Disable sorting during bulk insert — otherwise each setItem call
+            # triggers a re-sort and the row indices we hand to setItem stop
+            # matching the visual rows. Re-enable after populate.
+            self.table.setSortingEnabled(False)
             self.table.setRowCount(len(rows))
             for r, row in enumerate(rows):
                 tint = self.color_row(tuple(row))
                 for c, val in enumerate(row):
                     if c in self.currency_columns:
-                        item = QTableWidgetItem(format_usd(val))
+                        item = SortableItem(format_usd(val), sort_key=_to_float_or_none(val))
                         item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                     elif c in self.flag_columns:
-                        item = QTableWidgetItem(format_flag(val))
+                        item = SortableItem(format_flag(val), sort_key=_to_int_or_none(val))
                         item.setTextAlignment(Qt.AlignCenter)
                     else:
-                        item = QTableWidgetItem(format_cell(val))
+                        # Sort key is the raw SQL value: ISO YYYY-MM-DD strings
+                        # sort correctly as strings, numerics sort numerically,
+                        # NULLs are pushed to the end by SortableItem.__lt__.
+                        item = SortableItem(format_cell(val), sort_key=val)
                     if tint is not None:
                         item.setBackground(QBrush(tint))
                     self.table.setItem(r, c, item)
+            self.table.setSortingEnabled(True)
             self.table.resizeColumnsToContents()
             self.status.setText(f"{len(rows)} row(s)")
             conn.close()

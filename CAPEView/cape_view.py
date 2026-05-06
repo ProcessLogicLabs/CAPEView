@@ -64,6 +64,35 @@ class CAPEView(QMainWindow):
         self.setWindowTitle(f"{APP_NAME} {VERSION}")
         self.resize(1280, 800)
 
+        # Explicit menu-bar QSS — Qt's native Windows style ignores QPalette
+        # for QMenuBar, which otherwise renders the menu text invisibly
+        # against the muted-cyan window background.
+        self.setStyleSheet(
+            "QMenuBar {"
+            "  background-color: #4E8C9B;"
+            "  color: #FFFFFF;"
+            "  padding: 2px;"
+            "}"
+            "QMenuBar::item {"
+            "  background: transparent;"
+            "  color: #FFFFFF;"
+            "  padding: 6px 12px;"
+            "}"
+            "QMenuBar::item:selected {"
+            "  background: #5FA5B4;"
+            "  color: #FFFFFF;"
+            "}"
+            "QMenu {"
+            "  background-color: #FFFFFF;"
+            "  color: #1C323A;"
+            "  border: 1px solid #5FA5B4;"
+            "}"
+            "QMenu::item:selected {"
+            "  background: #5FA5B4;"
+            "  color: #FFFFFF;"
+            "}"
+        )
+
         self._build_menu()
 
         central = QWidget()
