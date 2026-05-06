@@ -35,6 +35,7 @@ from PyQt5.QtWidgets import (
 from CAPEView import cape_database as db
 from CAPEView.animated_splash import AnimatedMillSplash
 from CAPEView.auto_update import AutoUpdateManager
+from CAPEView.settings_dialog import SettingsDialog
 from CAPEView.theme import apply_theme
 from CAPEView.version import get_version
 from CAPEView.views.dashboard import DashboardView
@@ -108,7 +109,12 @@ class CAPEView(QMainWindow):
         menu_bar = self.menuBar()
 
         file_menu = menu_bar.addMenu("&File")
-        exit_action = QAction("Exit", self)
+        settings_action = QAction("&Settings...", self)
+        settings_action.setShortcut("Ctrl+,")
+        settings_action.triggered.connect(self._open_settings)
+        file_menu.addAction(settings_action)
+        file_menu.addSeparator()
+        exit_action = QAction("E&xit", self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
@@ -119,6 +125,12 @@ class CAPEView(QMainWindow):
         about_action = QAction(f"About {APP_NAME}", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
+
+    def _open_settings(self):
+        dlg = SettingsDialog(self)
+        dlg.exec_()
+        # If they changed the DB path, refresh the status-bar display.
+        self._db_label.setText(f"DB: {db.resolve_db_path()}")
 
     def _show_about(self):
         QMessageBox.about(

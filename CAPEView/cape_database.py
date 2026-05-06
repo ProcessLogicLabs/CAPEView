@@ -4,9 +4,10 @@
 - Schema migrations driven by ``schema_version`` PRAGMA
 - Query helpers used by ingestion jobs and views
 
-The database lives at SHARED_DB_PATH by default (``\\\\192.168.115.99\\scans\\cape.db``,
-matching the existing tariffmill.db location). Override via the ``CAPEVIEW_DB_PATH``
-environment variable for local testing.
+The database lives at SHARED_DB_PATH by default
+(``\\\\192.168.115.99\\scans\\Dev\\CAPEView\\Database\\cape.db``).
+Override via the ``CAPEVIEW_DB_PATH`` env var (highest priority) or via the
+Settings dialog (``database.path`` in settings.json).
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-SHARED_DB_PATH = r"\\192.168.115.99\scans\cape.db"
+SHARED_DB_PATH = r"\\192.168.115.99\scans\Dev\CAPEView\Database\cape.db"
 LOCAL_DB_PATH = Path.home() / "AppData" / "Local" / "CAPEView" / "cape.db"
 
 
@@ -145,10 +146,26 @@ COLUMN_ADDITIONS = [
 
 
 def resolve_db_path() -> Path:
-    """Return the active DB path. Order: env var > shared share (if reachable) > local."""
+    """Return the active DB path.
+
+    Priority:
+        1. ``CAPEVIEW_DB_PATH`` env var (highest)
+        2. ``database.path`` from settings.json (set via the Settings dialog)
+        3. ``SHARED_DB_PATH`` if its parent share is reachable
+        4. ``LOCAL_DB_PATH`` final fallback
+    """
     env = os.environ.get("CAPEVIEW_DB_PATH")
     if env:
         return Path(env)
+    # Settings file path is consulted lazily to avoid an import cycle and to
+    # keep this module importable from tests without instantiating settings.
+    try:
+        from CAPEView.settings_manager import SettingsManager
+        configured = SettingsManager().get("database.path")
+        if configured:
+            return Path(configured)
+    except Exception:
+        pass
     if Path(SHARED_DB_PATH).parent.exists():
         return Path(SHARED_DB_PATH)
     LOCAL_DB_PATH.parent.mkdir(parents=True, exist_ok=True)

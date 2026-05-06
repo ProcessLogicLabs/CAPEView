@@ -15,8 +15,11 @@ PartsBuilder, CHPWorkViewer, OCRMill, XMLGenMill.
 ## Stack
 
 - **Python 3.10+**, **PyQt5** (matches open-tariffmill — do **not** use PySide6)
-- **SQLite** with WAL on `\\192.168.115.99\scans\cape.db` (override via the
-  `CAPEVIEW_DB_PATH` env var)
+- **SQLite** with WAL on `\\192.168.115.99\scans\Dev\CAPEView\Database\cape.db`
+  (override via the `CAPEVIEW_DB_PATH` env var, or the in-app **File →
+  Settings** dialog which writes `database.path` into `settings.json`).
+  Resolution priority: env var > settings.json > shared share if reachable
+  > `%LOCALAPPDATA%\CAPEView\cape.db` fallback.
 - **openpyxl** for xlsx I/O — read-only mode for large sheets to avoid OOM
 - **PyInstaller** + **Inno Setup** for distribution
 - **GitHub Releases** auto-updater modeled on open-tariffmill's `auto_update.py`
@@ -36,6 +39,8 @@ CAPEView/                 # Python package
 ├── theme.py              # MUTED_CYAN palette + format helpers
 ├── cape_database.py      # SQLite connection, schema, queries, upserts
 ├── claims_csv_ingest.py  # Daily CSV drop-folder ingestion
+├── settings_manager.py   # JSON settings store (settings.json)
+├── settings_dialog.py    # File -> Settings dialog (DB path + seed copy)
 ├── workbook_export.py    # Regenerates the legacy CAPE ESTIMATE xlsx
 └── views/
     ├── dashboard.py
@@ -43,6 +48,7 @@ CAPEView/                 # Python package
     └── table_view.py     # SQLTableView base + 7 concrete views
 scripts/
 ├── migrate_workbook.py   # One-time xlsx -> cape.db
+├── copy_db.py            # CLI: copy a local cape.db to the shared share
 └── xlsx_audit.py         # Forensic audit (sheets/formulas/pivots/CF)
 tests/                    # pytest, no Qt imports needed for most tests
 .github/workflows/        # ci.yml + release.yml
@@ -168,6 +174,11 @@ pip install -r requirements.txt
 # Migrate the legacy workbook into a local DB
 $env:CAPEVIEW_DB_PATH = "$env:LOCALAPPDATA\CAPEView\cape.db"
 python scripts/migrate_workbook.py
+
+# Seed the shared share from that local DB (admin one-time)
+python scripts/copy_db.py `
+    --source "$env:LOCALAPPDATA\CAPEView\cape.db" `
+    --target "\\192.168.115.99\scans\Dev\CAPEView\Database\cape.db"
 
 # Run the app against that DB
 python -m CAPEView

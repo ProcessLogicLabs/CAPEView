@@ -17,3 +17,6 @@ All notable changes to CAPEView are tracked here. Format inspired by [Keep a Cha
 - Importer-status filter dropdowns and urgency row coloring on Entries / Claims / Compliance tabs
 - `workbook_export.py` now also regenerates the three pivot tabs as static grids
 - `scripts/xlsx_audit.py` — forensic XML audit of any legacy CAPE workbook (sheets, named ranges, pivots, formulas, conditional formats)
+- **Settings menu** (File → Settings, Ctrl+,) — change the shared SQLite location at runtime, with a "Test" button that opens the chosen DB read-only and reports row counts, plus an "Initialize from another database" section that copies a local DB to the configured location for first-time admin seeding
+- `scripts/copy_db.py` — CLI equivalent of the dialog's copy action; used to seed the shared share from a freshly migrated local DB
+- Default shared DB path moved to `\\192.168.115.99\scans\Dev\CAPEView\Database\cape.db` (was `\\...\scans\cape.db`) so CAPEView data lives alongside the other Dev/* projects on the share

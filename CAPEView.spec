@@ -50,6 +50,8 @@ a = Analysis(
         "CAPEView.auto_update",
         "CAPEView.workbook_export",
         "CAPEView.claims_csv_ingest",
+        "CAPEView.settings_manager",
+        "CAPEView.settings_dialog",
         "CAPEView.version",
         "CAPEView.views",
         "CAPEView.views.dashboard",
