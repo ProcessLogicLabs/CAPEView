@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Allow running as a script without installing the package.
@@ -42,6 +42,15 @@ def _iso_date(v):
     if isinstance(v, datetime):
         return v.date().isoformat()
     return str(v)
+
+
+def _liq_plus_days(v, days: int) -> str | None:
+    """Return ``liq + days`` as ISO date, or None if liq isn't a usable date."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, datetime):
+        return (v + timedelta(days=days)).date().isoformat()
+    return None
 
 
 def _to_int_flag(v) -> int | None:
@@ -89,7 +98,10 @@ def load_entry_count(ws) -> list[dict]:
                 "liquidation_status": row[22],
                 "final_liquidation_date": _iso_date(row[23]),
                 # row[24] = "Finally Liquidated" (Y/N flag) — derived, not stored.
-                "cape_liq_deadline": _iso_date(row[25]),
+                # cape_liq_deadline is computed from liquidation_date+80; the
+                # workbook's Z column has =V+80 which evaluates to 1900-03-20
+                # for unliquidated entries (V is blank → 0+80 = day 80).
+                "cape_liq_deadline": _liq_plus_days(row[21], 80),
                 "protest_number": row[26],
                 "protest_status": row[27],
                 "review_team_number": row[28],

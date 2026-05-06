@@ -12,6 +12,7 @@ QSS (Qt's native Windows style ignores QPalette for QHeaderView), row coloring.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date
 
@@ -66,6 +67,26 @@ URGENCY_DUE_30  = QColor(252, 235, 196)   # amber
 URGENCY_DUE_60  = QColor(252, 246, 220)   # pale amber
 URGENCY_OK      = QColor(220, 240, 226)   # soft green
 URGENCY_NEUTRAL = None
+
+
+_ISO_DATE_RE     = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+_ISO_DATETIME_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::\d{2})?")
+
+
+def format_cell(value) -> str:
+    """Render any value for display. ISO dates/timestamps -> MM/DD/YYYY."""
+    if value is None:
+        return ""
+    s = str(value)
+    m = _ISO_DATE_RE.match(s)
+    if m:
+        y, mo, d = m.groups()
+        return f"{int(mo)}/{int(d)}/{y}"
+    m = _ISO_DATETIME_RE.match(s)
+    if m:
+        y, mo, d, hh, mm = m.groups()
+        return f"{int(mo)}/{int(d)}/{y} {hh}:{mm}"
+    return s
 
 
 def deadline_urgency(deadline_iso: str | None, today: date | None = None) -> QColor | None:
@@ -217,7 +238,7 @@ class SQLTableView(QWidget):
             for r, row in enumerate(rows):
                 tint = self.color_row(tuple(row))
                 for c, val in enumerate(row):
-                    item = QTableWidgetItem("" if val is None else str(val))
+                    item = QTableWidgetItem(format_cell(val))
                     if tint is not None:
                         item.setBackground(QBrush(tint))
                     self.table.setItem(r, c, item)
