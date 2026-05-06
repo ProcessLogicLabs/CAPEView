@@ -78,10 +78,12 @@ class DashboardView(QWidget):
         outer.addLayout(grid)
 
         outer.addStretch()
-        self._db_label = QLabel()
-        self._db_label.setAlignment(Qt.AlignRight)
-        self._db_label.setStyleSheet("color: #5A7079; font-size: 11px;")
-        outer.addWidget(self._db_label)
+
+        # Status text used for transient errors only (success path leaves it empty)
+        self._status = QLabel()
+        self._status.setAlignment(Qt.AlignRight)
+        self._status.setStyleSheet("color: #A4515A; font-size: 11px;")
+        outer.addWidget(self._status)
 
         self.refresh()
 
@@ -90,7 +92,7 @@ class DashboardView(QWidget):
         try:
             conn = db.connect()
             db.init_db(conn)
-            self._db_label.setText(f"Database: {db.resolve_db_path()}")
+            self._status.setText("")
 
             self.cards["entries"].set_value(self._scalar(conn, "SELECT COUNT(*) FROM entries"))
             self.cards["eligible"].set_value(
@@ -121,7 +123,7 @@ class DashboardView(QWidget):
         except Exception as e:
             for card in self.cards.values():
                 card.set_value("—")
-            self._db_label.setText(f"Database error: {e}")
+            self._status.setText(f"Database error: {e}")
 
     @staticmethod
     def _scalar(conn, sql: str):

@@ -25,7 +25,6 @@ from PyQt5.QtGui import QFont, QIcon
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
-    QLabel,
     QMainWindow,
     QMessageBox,
     QStatusBar,
@@ -128,9 +127,6 @@ class CAPEView(QMainWindow):
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self._db_label = QLabel(f"DB: {db.resolve_db_path()}")
-        self._db_label.setStyleSheet("color: #5A7079;")
-        self.status_bar.addPermanentWidget(self._db_label)
         self.status_bar.showMessage(f"{APP_NAME} {VERSION} ready", 5000)
 
         self.update_manager = None
@@ -160,8 +156,6 @@ class CAPEView(QMainWindow):
     def _open_settings(self):
         dlg = SettingsDialog(self)
         dlg.exec_()
-        # If they changed the DB path, refresh the status-bar display.
-        self._db_label.setText(f"DB: {db.resolve_db_path()}")
 
     def _show_about(self):
         QMessageBox.about(

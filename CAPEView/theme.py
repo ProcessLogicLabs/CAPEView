@@ -80,6 +80,24 @@ def apply_theme(app, palette_dict=None):
             palette.setColor(role, QColor(*palette_dict[name]))
     app.setPalette(palette)
 
+    # Default QPushButton style — Qt's native Windows style ignores the
+    # palette's Button/ButtonText, so unstyled buttons render white-on-white.
+    # Buttons with their own setStyleSheet override this (per-widget styles
+    # win over the application stylesheet in Qt).
+    app.setStyleSheet(
+        "QPushButton {"
+        "  background-color: #4E8C9B;"
+        "  color: #FFFFFF;"
+        "  border: 0px;"
+        "  padding: 6px 14px;"
+        "  border-radius: 3px;"
+        "  font-weight: 600;"
+        "}"
+        "QPushButton:hover    { background-color: #5FA5B4; }"
+        "QPushButton:pressed  { background-color: #3C7080; }"
+        "QPushButton:disabled { background-color: #B0C8CD; color: #E8F2F4; }"
+    )
+
 
 def style(button_kind: str) -> str:
     """Return the QSS string for a named button style ('primary', 'info', ...)."""
