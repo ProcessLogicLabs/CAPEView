@@ -124,12 +124,14 @@ def test_refunds_view_self_filer_filter(seeded_db):
 def test_deadlines_view_groups_by_week(seeded_db):
     from CAPEView.views.table_view import DeadlinesView
     rows = _run_view(DeadlinesView, seeded_db)
-    # Default cape_eligible='Y' -> 3 entries. ACME has 2 in same week, WIDGETCO 1 in next.
+    # Default cape_eligible='Y' -> 3 entries. ACME has 2 in HOUSTON same week,
+    # WIDGETCO has 1 in LOS ANGELES the next week. Output columns:
+    # (week_start, importer_name, div, n, soonest, has_claim)
     weeks = {r[0] for r in rows}
     assert len(weeks) == 2  # two distinct weeks
     by_imp = {r[1]: r for r in rows}
-    assert by_imp["ACME INC"][2] == 2     # entry count
-    assert by_imp["WIDGETCO"][2] == 1
+    assert by_imp["ACME INC"][3] == 2     # entry count
+    assert by_imp["WIDGETCO"][3] == 1
 
 
 def test_deadlines_claim_filed_filter(seeded_db):

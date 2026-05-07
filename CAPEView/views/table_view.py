@@ -721,7 +721,7 @@ class DeadlinesView(SQLTableView):
     """
 
     title = "Deadlines (CAPE LIQ + 80)"
-    headers = ["Week starting", "Importer Name", "Entries", "Soonest deadline", "Has CAPE Claim"]
+    headers = ["Week starting", "Importer Name", "DIV", "Entries", "Soonest deadline", "Has CAPE Claim"]
     placeholder = "Filter by importer name..."
     row_limit = 5000
     status_filters = [
@@ -737,9 +737,14 @@ class DeadlinesView(SQLTableView):
         super().__init__(parent)
 
     def build_query(self, filter_text, status_filters):
+        # DIV is included in the projection AND the GROUP BY so an importer
+        # with entries across multiple DIVs in the same week renders as
+        # separate rows per office — more accurate than picking one
+        # representative DIV via MIN/MAX.
         sql = (
             "SELECT date(e.cape_liq_deadline, 'weekday 0', '-6 days') AS week_start, "
             "       e.importer_name, "
+            "       e.div, "
             "       COUNT(*) AS n, "
             "       MIN(e.cape_liq_deadline) AS soonest, "
             "       CASE WHEN COUNT(c.claim_number) > 0 THEN 'Y' ELSE 'N' END AS has_claim "
@@ -764,7 +769,7 @@ class DeadlinesView(SQLTableView):
             clause, p = SQLTableView.yn_clause(f"i.{col}", status_filters.get(col))
             sql += clause
             params.extend(p)
-        sql += ("GROUP BY week_start, e.importer_name "
+        sql += ("GROUP BY week_start, e.importer_name, e.div "
                 "HAVING 1=1 ")
         claim_val = status_filters.get("claim_filed")
         if claim_val == "Y":
@@ -773,14 +778,15 @@ class DeadlinesView(SQLTableView):
             sql += "AND has_claim = 'N' "
         # Default sort: soonest deadline first (urgency-driven view). week_start
         # is derived from cape_liq_deadline so sorting on `soonest` ASC also
-        # implicitly orders by week. importer_name as a deterministic
-        # tie-breaker so same-day deadlines render in stable alphabetical order.
-        sql += ("ORDER BY soonest ASC, e.importer_name ASC "
+        # implicitly orders by week. importer_name + div as deterministic
+        # tie-breakers so same-day deadlines render in stable order across
+        # reloads.
+        sql += ("ORDER BY soonest ASC, e.importer_name ASC, e.div ASC "
                 f"LIMIT {self.row_limit}")
         return sql, tuple(params)
 
     def color_row(self, row):
-        return deadline_urgency(row[3])  # soonest deadline
+        return deadline_urgency(row[4])  # soonest deadline (DIV inserted at index 2)
 
 
 class RefundsView(SQLTableView):
