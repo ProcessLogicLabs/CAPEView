@@ -33,3 +33,6 @@ Thumbs.db
 *.db-shm
 CAPEView/auth_users.json
 CAPE_local/
+
+# Generated documentation artifacts (re-runnable from scripts/)
+docs/*.pdf
