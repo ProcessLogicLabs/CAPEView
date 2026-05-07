@@ -5,7 +5,7 @@ __fallback_version__ before running PyInstaller). For dev runs, this is the
 authoritative version string.
 """
 
-__fallback_version__ = "v0.0.5"
+__fallback_version__ = "v0.0.6"
 
 
 def get_version() -> str:
