@@ -152,6 +152,9 @@ class DashboardView(QWidget):
 
         grid = QGridLayout()
         grid.setSpacing(12)
+        # 4x2 layout: row 0 is volume/scope, row 1 is urgency/activity. The
+        # corrections / regressions pair sits at the right of row 1 so the
+        # complementary trend numbers read together.
         self.cards = {
             "entries":              StatCard("ENTRIES TRACKED"),
             "eligible":             StatCard("CAPE PHASE-1 ELIGIBLE"),
@@ -160,10 +163,11 @@ class DashboardView(QWidget):
             "liq_due_30":           StatCard("LIQ DEADLINE ≤ 30 DAYS"),
             "rejected_open":        StatCard("REJECTED ENTRIES OPEN"),
             "corrections_7d":       StatCard("CORRECTIONS (7D)"),
+            "regressions_7d":       StatCard("REGRESSIONS (7D)"),
         }
         items = list(self.cards.values())
         for i, card in enumerate(items):
-            grid.addWidget(card, i // 3, i % 3)
+            grid.addWidget(card, i // 4, i % 4)
         outer.addLayout(grid)
 
         outer.addStretch()
@@ -260,6 +264,19 @@ class DashboardView(QWidget):
                              "  AND user_id = 'csv_ingest' "
                              "  AND UPPER(COALESCE(old_value,'')) = 'FAILED' "
                              "  AND UPPER(COALESCE(new_value,'')) <> 'FAILED' "
+                             "  AND date(changed_at) >= date('now','-7 day')")
+            )
+            # Regressions: claims that transitioned INTO Failed in the last
+            # 7 days — the inverse of CORRECTIONS, useful for spotting
+            # upstream backsliding.
+            self.cards["regressions_7d"].set_value(
+                self._scalar(conn,
+                             "SELECT COUNT(DISTINCT row_key) FROM audit_log "
+                             "WHERE table_name = 'claims' "
+                             "  AND field = 'status' "
+                             "  AND user_id = 'csv_ingest' "
+                             "  AND UPPER(COALESCE(old_value,'')) <> 'FAILED' "
+                             "  AND UPPER(COALESCE(new_value,'')) = 'FAILED' "
                              "  AND date(changed_at) >= date('now','-7 day')")
             )
             conn.close()
