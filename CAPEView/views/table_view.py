@@ -64,6 +64,50 @@ YN_TEXT_OPTIONS = [("Any", None), ("Yes", "Y"), ("No", "N")]
 
 
 # ---------------------------------------------------------------------------
+# DIV filter — auto-extending from live entries data, no hardcoded prefix table.
+#
+# File numbers expand into new ranges over time (e.g. when 75xxxxxxx fills
+# up, Houston gets 76xxxxxxx allocated next). Hardcoding a prefix→DIV table
+# would rot. Instead, build the filter combo from whatever DIV values are
+# already present in the entries table — the moment a new range lands, the
+# combo extends automatically on the next app launch.
+
+_div_options_cache: list[tuple[str, object]] | None = None
+
+
+def _div_options() -> list[tuple[str, object]]:
+    """Return ``[(display, value), ...]`` for the DIV filter combo.
+
+    Cached process-wide; rebuilds on next app launch. DIVs change rarely
+    (offices don't materialize mid-day), so the cost of a stale cache is
+    a brief delay before a new office shows in the filter list.
+    """
+    global _div_options_cache
+    if _div_options_cache is not None:
+        return _div_options_cache
+    opts: list[tuple[str, object]] = [("Any", None)]
+    try:
+        conn = db.connect()
+        db.init_db(conn)
+        rows = conn.execute(
+            "SELECT DISTINCT div FROM entries "
+            "WHERE div IS NOT NULL AND TRIM(div) <> '' "
+            "ORDER BY div"
+        ).fetchall()
+        conn.close()
+        for r in rows:
+            opts.append((r[0], r[0]))
+    except Exception:
+        pass
+    _div_options_cache = opts
+    return _div_options_cache
+
+
+def _div_filter_spec(default=None) -> FilterSpec:
+    return FilterSpec("DIV", "div", _div_options(), default=default)
+
+
+# ---------------------------------------------------------------------------
 # Urgency colors — palette consistent with theme.py
 
 URGENCY_OVERDUE = QColor(245, 210, 215)   # soft red
@@ -473,9 +517,15 @@ class EntriesView(SQLTableView):
     ]
     placeholder = "Filter by importer or entry #..."
     currency_columns = [8]  # Total Liq Duty
+    # Class-level base (without DIV) — test_pivot_queries reads this for defaults.
     status_filters = [
         FilterSpec("CAPE Eligible", "cape_eligible", YN_TEXT_OPTIONS),
     ] + _importer_filters()
+
+    def __init__(self, parent=None):
+        # Append the dynamic DIV filter at instance time
+        self.status_filters = list(type(self).status_filters) + [_div_filter_spec()]
+        super().__init__(parent)
 
     def build_query(self, filter_text, status_filters):
         sql = (
@@ -496,6 +546,10 @@ class EntriesView(SQLTableView):
         if cape_val is not None:
             sql += "AND UPPER(COALESCE(e.cape_phase1_eligible,'')) = ? "
             params.append(str(cape_val).upper())
+        div_val = status_filters.get("div")
+        if div_val:
+            sql += "AND e.div = ? "
+            params.append(div_val)
         sql, params = _apply_importer_filters(sql, params, status_filters)
         sql += ("ORDER BY e.cape_liq_deadline IS NULL, e.cape_liq_deadline ASC "
                 f"LIMIT {self.row_limit}")
@@ -516,7 +570,7 @@ class ClaimsView(SQLTableView):
     title = "Claims"
     headers = [
         "Entry Summary #", "Claim #", "Status", "Error Description",
-        "Notes", "Manual", "First Seen", "Last Seen",
+        "Notes", "Manual", "DIV", "First Seen", "Last Seen",
     ]
     placeholder = "Filter by entry, claim, or error..."
     status_filters = [
@@ -532,12 +586,14 @@ class ClaimsView(SQLTableView):
         ),
     ]
 
-    # Column indices that are user-editable (Status, Error Description, Notes)
+    # Column indices that are user-editable (Status, Error Description, Notes).
+    # DIV was inserted at index 6 — purely display, kept after the editable cells
+    # so these indices don't shift.
     EDITABLE_COLUMNS = (2, 3, 4)
-    # Maps column index -> claims-table field name (for the SQL UPDATE)
     EDITABLE_FIELD = {2: "status", 3: "error_description", 4: "notes"}
 
     def __init__(self, parent=None):
+        self.status_filters = list(type(self).status_filters) + [_div_filter_spec()]
         super().__init__(parent)
         # Hook the model edit signal AFTER the base class created self.table
         self.table.itemChanged.connect(self._on_item_changed)
@@ -545,28 +601,35 @@ class ClaimsView(SQLTableView):
 
     def build_query(self, filter_text, status_filters):
         sql = (
-            "SELECT entry_summary_number, claim_number, status, error_description, "
-            "       COALESCE(notes,''), "
-            "       CASE WHEN manual_override = 1 THEN 'Y' ELSE '' END, "
-            "       first_seen, last_seen "
-            "FROM claims WHERE 1=1 "
+            "SELECT c.entry_summary_number, c.claim_number, c.status, c.error_description, "
+            "       COALESCE(c.notes,''), "
+            "       CASE WHEN c.manual_override = 1 THEN 'Y' ELSE '' END, "
+            "       e.div, "
+            "       c.first_seen, c.last_seen "
+            "FROM claims c "
+            "LEFT JOIN entries e ON e.entry_summary_number = c.entry_summary_number "
+            "WHERE 1=1 "
         )
         params: list = []
         status_val = status_filters.get("status")
         if status_val is not None:
-            sql += "AND status = ? "
+            sql += "AND c.status = ? "
             params.append(status_val)
         manual_val = status_filters.get("manual_override")
         if manual_val is not None:
-            sql += "AND manual_override = ? "
+            sql += "AND c.manual_override = ? "
             params.append(int(manual_val))
+        div_val = status_filters.get("div")
+        if div_val:
+            sql += "AND e.div = ? "
+            params.append(div_val)
         if filter_text:
-            sql += ("AND (entry_summary_number LIKE ? OR claim_number LIKE ? "
-                    "     OR COALESCE(error_description,'') LIKE ? "
-                    "     OR COALESCE(notes,'') LIKE ?) ")
+            sql += ("AND (c.entry_summary_number LIKE ? OR c.claim_number LIKE ? "
+                    "     OR COALESCE(c.error_description,'') LIKE ? "
+                    "     OR COALESCE(c.notes,'') LIKE ?) ")
             like = f"%{filter_text}%"
             params.extend([like, like, like, like])
-        sql += f"ORDER BY last_seen DESC LIMIT {self.row_limit}"
+        sql += f"ORDER BY c.last_seen DESC LIMIT {self.row_limit}"
         return sql, tuple(params)
 
     def color_row(self, row):
@@ -642,14 +705,19 @@ class ClaimsView(SQLTableView):
 
 class ComplianceView(SQLTableView):
     title = "Compliance — Rejected Claims Needing Action"
-    headers = ["Entry Summary #", "Claim #", "Status", "Error Description", "Last Seen", "Importer Name"]
+    headers = ["Entry Summary #", "Claim #", "Status", "Error Description",
+               "DIV", "Last Seen", "Importer Name"]
     placeholder = "Filter by entry, error, or importer..."
     status_filters = _importer_filters()
+
+    def __init__(self, parent=None):
+        self.status_filters = list(type(self).status_filters) + [_div_filter_spec()]
+        super().__init__(parent)
 
     def build_query(self, filter_text, status_filters):
         sql = (
             "SELECT c.entry_summary_number, c.claim_number, c.status, "
-            "       c.error_description, c.last_seen, e.importer_name "
+            "       c.error_description, e.div, c.last_seen, e.importer_name "
             "FROM claims c "
             "LEFT JOIN entries e ON e.entry_summary_number = c.entry_summary_number "
             "LEFT JOIN importer_status i ON i.importer_number = e.importer_number "
@@ -665,6 +733,10 @@ class ComplianceView(SQLTableView):
                     "     OR COALESCE(e.importer_name,'') LIKE ?) ")
             like = f"%{filter_text}%"
             params.extend([like, like, like])
+        div_val = status_filters.get("div")
+        if div_val:
+            sql += "AND e.div = ? "
+            params.append(div_val)
         sql, params = _apply_importer_filters(sql, params, status_filters)
         sql += f"ORDER BY c.last_seen DESC LIMIT {self.row_limit}"
         return sql, tuple(params)
@@ -683,6 +755,13 @@ class ImportersView(SQLTableView):
     flag_columns = [2, 3, 4, 5, 6]  # Self Filer, ACE, ACH, 4811 Client, PSC
     status_filters = _importer_filters()
 
+    def __init__(self, parent=None):
+        # Importers don't belong to a single DIV (they can ship through multiple
+        # offices), so DIV is a filter-only concern here — "show importers
+        # active in this DIV" via EXISTS against entries.
+        self.status_filters = list(type(self).status_filters) + [_div_filter_spec()]
+        super().__init__(parent)
+
     def build_query(self, filter_text, status_filters):
         sql = (
             "SELECT i.importer_number, i.importer_name, i.self_filer, i.ace_account, "
@@ -695,6 +774,12 @@ class ImportersView(SQLTableView):
             sql += "AND (i.importer_number LIKE ? OR i.importer_name LIKE ?) "
             like = f"%{filter_text}%"
             params.extend([like, like])
+        div_val = status_filters.get("div")
+        if div_val:
+            sql += ("AND EXISTS (SELECT 1 FROM entries e "
+                    "            WHERE e.importer_number = i.importer_number "
+                    "              AND e.div = ?) ")
+            params.append(div_val)
         sql, params = _apply_importer_filters(sql, params, status_filters)
         sql += f"ORDER BY i.importer_name ASC LIMIT {self.row_limit}"
         return sql, tuple(params)
@@ -715,6 +800,7 @@ class DeadlinesView(SQLTableView):
     title = "Deadlines (CAPE LIQ + 80)"
     headers = ["Week starting", "Importer Name", "Entries", "Soonest deadline", "Has CAPE Claim"]
     placeholder = "Filter by importer name..."
+    row_limit = 5000
     status_filters = [
         FilterSpec("CAPE Eligible", "cape_eligible", YN_TEXT_OPTIONS, default="Y"),
         FilterSpec("Claim filed",   "claim_filed",
@@ -722,7 +808,10 @@ class DeadlinesView(SQLTableView):
         FilterSpec("Self Filer",    "self_filer",         YN_OPTIONS),
         FilterSpec("4811 Client",   "is_4811_client",     YN_OPTIONS),
     ]
-    row_limit = 5000
+
+    def __init__(self, parent=None):
+        self.status_filters = list(type(self).status_filters) + [_div_filter_spec()]
+        super().__init__(parent)
 
     def build_query(self, filter_text, status_filters):
         sql = (
@@ -744,6 +833,10 @@ class DeadlinesView(SQLTableView):
         if filter_text:
             sql += "AND e.importer_name LIKE ? "
             params.append(f"%{filter_text}%")
+        div_val = status_filters.get("div")
+        if div_val:
+            sql += "AND e.div = ? "
+            params.append(div_val)
         for col in ("self_filer", "is_4811_client"):
             clause, p = SQLTableView.yn_clause(f"i.{col}", status_filters.get(col))
             sql += clause
@@ -772,10 +865,14 @@ class RefundsView(SQLTableView):
     headers = ["Importer Name", "Liq Status", "CAPE Phase 1", "Σ Line Duty", "Entries", "Lines"]
     placeholder = "Filter by importer name..."
     currency_columns = [3]  # Σ Line Duty
+    row_limit = 5000
     status_filters = [
         FilterSpec("CAPE Eligible", "cape_eligible", YN_TEXT_OPTIONS, default="Y"),
     ] + _importer_filters()
-    row_limit = 5000
+
+    def __init__(self, parent=None):
+        self.status_filters = list(type(self).status_filters) + [_div_filter_spec()]
+        super().__init__(parent)
 
     def build_query(self, filter_text, status_filters):
         sql = (
@@ -798,6 +895,10 @@ class RefundsView(SQLTableView):
         if filter_text:
             sql += "AND e.importer_name LIKE ? "
             params.append(f"%{filter_text}%")
+        div_val = status_filters.get("div")
+        if div_val:
+            sql += "AND e.div = ? "
+            params.append(div_val)
         sql, params = _apply_importer_filters(sql, params, status_filters)
         sql += ("GROUP BY e.importer_name, e.liquidation_status, e.cape_phase1_eligible "
                 "ORDER BY total_duty DESC "
@@ -816,16 +917,20 @@ class ProtestsView(SQLTableView):
     title = "Protests (Final Liquidation + 180)"
     headers = ["Final-Liq week", "Importer Name", "Entries", "Soonest Final-Liq", "Has CAPE Claim"]
     placeholder = "Filter by importer name..."
+    row_limit = 5000
+    # Class-level base (without DIV) — DIV is appended dynamically in __init__
+    # to replace the previous hardcoded HOUSTON/LOS ANGELES/ATLANTA list with
+    # an auto-extending spec drawn from current entries.div values.
     status_filters = [
         FilterSpec("Claim filed",  "claim_filed",
                    [("Any", None), ("Yes", "Y"), ("No", "N")]),
-        FilterSpec("DIV",          "div",
-                   [("Any", None), ("HOUSTON", "HOUSTON"), ("LOS ANGELES", "LOS ANGELES"),
-                    ("ATLANTA", "ATLANTA")]),
         FilterSpec("Self Filer",   "self_filer",         YN_OPTIONS),
         FilterSpec("4811 Client",  "is_4811_client",     YN_OPTIONS),
     ]
-    row_limit = 5000
+
+    def __init__(self, parent=None):
+        self.status_filters = list(type(self).status_filters) + [_div_filter_spec()]
+        super().__init__(parent)
 
     def build_query(self, filter_text, status_filters):
         sql = (

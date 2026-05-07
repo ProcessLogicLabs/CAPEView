@@ -38,28 +38,28 @@ def seeded_db(tmp_path, monkeypatch):
 
     base = date(2026, 5, 1)
     entries = [
-        # esn,         importer,      cape, liq_status, liq_date,            cape_liq_deadline, final_liq, total_duty
-        ("E001", "11-1111111", "ACME INC",     "Y", "Liquidated",
+        # esn,    importer,      importer_name, div,         cape, liq_status, liq_date, cape_liq, final_liq, duty
+        ("E001", "11-1111111", "ACME INC",     "HOUSTON",    "Y", "Liquidated",
          (base).isoformat(),                (base + timedelta(days=80)).isoformat(),
          (base + timedelta(days=180)).isoformat(),  500.00),
-        ("E002", "11-1111111", "ACME INC",     "Y", "Liquidated",
+        ("E002", "11-1111111", "ACME INC",     "HOUSTON",    "Y", "Liquidated",
          (base).isoformat(),                (base + timedelta(days=80)).isoformat(),
          (base + timedelta(days=180)).isoformat(),  300.00),
-        ("E003", "22-2222222", "WIDGETCO",     "Y", "Pending",
+        ("E003", "22-2222222", "WIDGETCO",     "LOS ANGELES","Y", "Pending",
          (base + timedelta(days=7)).isoformat(),
          (base + timedelta(days=87)).isoformat(),
          (base + timedelta(days=187)).isoformat(),  100.00),
-        ("E004", "22-2222222", "WIDGETCO",     "N", "Liquidated",
+        ("E004", "22-2222222", "WIDGETCO",     "ATLANTA",    "N", "Liquidated",
          (base).isoformat(),                (base + timedelta(days=80)).isoformat(),
          (base + timedelta(days=180)).isoformat(), 9999.00),
     ]
-    for esn, imp_no, imp_name, cape, liq_status, liq, cape_liq, final_liq, duty in entries:
+    for esn, imp_no, imp_name, div_, cape, liq_status, liq, cape_liq, final_liq, duty in entries:
         conn.execute(
-            "INSERT INTO entries (entry_summary_number, importer_number, importer_name, "
+            "INSERT INTO entries (entry_summary_number, importer_number, importer_name, div, "
             " cape_phase1_eligible, liquidation_status, liquidation_date, cape_liq_deadline, "
             " final_liquidation_date, total_liquidated_duty, last_imported_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
-            (esn, imp_no, imp_name, cape, liq_status, liq, cape_liq, final_liq, duty),
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            (esn, imp_no, imp_name, div_, cape, liq_status, liq, cape_liq, final_liq, duty),
         )
 
     # entry_lines mirroring the entries (one line each)
@@ -153,6 +153,71 @@ def test_protests_view_groups_by_final_liq_week(seeded_db):
         totals[r[1]] = totals.get(r[1], 0) + r[2]
     assert totals.get("ACME INC") == 2
     assert totals.get("WIDGETCO") == 2  # E003 (week +87) + E004 (week +80)
+
+
+def test_entries_view_div_filter(seeded_db):
+    from CAPEView.views.table_view import EntriesView
+    rows = _run_view(EntriesView, seeded_db, div="HOUSTON")
+    esns = {r[0] for r in rows}
+    assert esns == {"E001", "E002"}  # only the two HOUSTON entries
+
+    rows = _run_view(EntriesView, seeded_db, div="LOS ANGELES")
+    assert {r[0] for r in rows} == {"E003"}
+
+
+def test_claims_view_div_filter_via_join(seeded_db):
+    """Claims has no div column of its own — DIV filter applies via the
+    LEFT JOIN to entries.div."""
+    from CAPEView.views.table_view import ClaimsView
+    rows = _run_view(ClaimsView, seeded_db, div="HOUSTON")
+    # Only E001's claim is in HOUSTON (E001 -> ACME -> HOUSTON; E003 -> LOS ANGELES)
+    esns = {r[0] for r in rows}
+    assert esns == {"E001"}
+
+    rows = _run_view(ClaimsView, seeded_db, div="LOS ANGELES")
+    assert {r[0] for r in rows} == {"E003"}
+
+
+def test_compliance_view_div_filter(seeded_db):
+    from CAPEView.views.table_view import ComplianceView
+    # Only E003 is Failed; it's in LOS ANGELES
+    rows = _run_view(ComplianceView, seeded_db, div="LOS ANGELES")
+    assert any(r[0] == "E003" for r in rows)
+    rows = _run_view(ComplianceView, seeded_db, div="HOUSTON")
+    assert rows == []  # no failed claims in HOUSTON
+
+
+def test_importers_view_div_filter_uses_exists(seeded_db):
+    """Importers has no DIV column itself; filter shows importers who have at
+    least one entry in the chosen DIV."""
+    from CAPEView.views.table_view import ImportersView
+    rows = _run_view(ImportersView, seeded_db, div="HOUSTON")
+    assert {r[1] for r in rows} == {"ACME INC"}  # only ACME ships through HOUSTON
+
+    rows = _run_view(ImportersView, seeded_db, div="ATLANTA")
+    assert {r[1] for r in rows} == {"WIDGETCO"}  # only WIDGETCO has an ATLANTA entry
+
+
+def test_deadlines_view_div_filter(seeded_db):
+    from CAPEView.views.table_view import DeadlinesView
+    # ACME entries are HOUSTON; WIDGETCO E003 is LOS ANGELES (only LA entry that's CAPE-eligible)
+    rows = _run_view(DeadlinesView, seeded_db, div="HOUSTON")
+    assert {r[1] for r in rows} == {"ACME INC"}
+
+
+def test_refunds_view_div_filter(seeded_db):
+    from CAPEView.views.table_view import RefundsView
+    rows = _run_view(RefundsView, seeded_db, div="HOUSTON")
+    # ACME's HOUSTON entries: E001 ($500) + E002 ($300) = $800
+    assert len(rows) == 1
+    assert rows[0][0] == "ACME INC"
+    assert rows[0][3] == 800.0
+
+
+def test_protests_view_div_filter(seeded_db):
+    from CAPEView.views.table_view import ProtestsView
+    rows = _run_view(ProtestsView, seeded_db, div="LOS ANGELES")
+    assert {r[1] for r in rows} == {"WIDGETCO"}  # E003 is the LA WIDGETCO entry
 
 
 def test_compliance_view_excludes_actioned_rejections(seeded_db):
