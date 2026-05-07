@@ -771,7 +771,12 @@ class DeadlinesView(SQLTableView):
             sql += "AND has_claim = 'Y' "
         elif claim_val == "N":
             sql += "AND has_claim = 'N' "
-        sql += f"ORDER BY week_start ASC, n DESC LIMIT {self.row_limit}"
+        # Default sort: soonest deadline first (urgency-driven view). week_start
+        # is derived from cape_liq_deadline so sorting on `soonest` ASC also
+        # implicitly orders by week. importer_name as a deterministic
+        # tie-breaker so same-day deadlines render in stable alphabetical order.
+        sql += ("ORDER BY soonest ASC, e.importer_name ASC "
+                f"LIMIT {self.row_limit}")
         return sql, tuple(params)
 
     def color_row(self, row):
