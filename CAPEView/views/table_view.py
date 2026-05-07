@@ -550,7 +550,11 @@ class EntriesView(SQLTableView):
             sql += "AND e.div = ? "
             params.append(div_val)
         sql, params = _apply_importer_filters(sql, params, status_filters)
-        sql += ("ORDER BY e.cape_liq_deadline IS NULL, e.cape_liq_deadline ASC "
+        # Default sort: newest entries first by entry_summary_number. Users can
+        # click any column header (e.g. CAPE LIQ Deadline) to switch to a
+        # deadline-urgency view at runtime; the SortableItem typed keys keep
+        # the ordering correct across currency, dates, flags, and NULLs.
+        sql += ("ORDER BY e.entry_summary_number DESC "
                 f"LIMIT {self.row_limit}")
         return sql, tuple(params)
 
@@ -628,7 +632,12 @@ class ClaimsView(SQLTableView):
                     "     OR COALESCE(c.notes,'') LIKE ?) ")
             like = f"%{filter_text}%"
             params.extend([like, like, like, like])
-        sql += f"ORDER BY c.last_seen DESC LIMIT {self.row_limit}"
+        # Default sort: most recent activity first; ties broken deterministically
+        # by claim_number then entry_summary_number (both DESC) so the same data
+        # always renders in the same order across reloads. Users can click any
+        # column header to override.
+        sql += ("ORDER BY c.last_seen DESC, c.claim_number DESC, "
+                f"c.entry_summary_number DESC LIMIT {self.row_limit}")
         return sql, tuple(params)
 
     def color_row(self, row):
