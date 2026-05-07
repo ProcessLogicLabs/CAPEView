@@ -37,6 +37,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Bundled populated DB. Seeded into the user-chosen folder. onlyifdoesntexist
+; protects existing data on reinstall/upgrade; uninsneveruninstall keeps user
+; data through an uninstall.
+Source: "Resources\seed\cape.db"; DestDir: "{code:GetDbDir}"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\_internal\Resources\icon.ico"; WorkingDir: "{app}"
@@ -45,3 +49,51 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilen
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent runasoriginaluser shellexec
+
+[Code]
+var
+  DbDirPage: TInputDirWizardPage;
+
+procedure InitializeWizard;
+begin
+  DbDirPage := CreateInputDirPage(wpSelectDir,
+    'CAPEView Database Location',
+    'Where should CAPEView store its database file?',
+    'Select the folder where the populated cape.db will be installed. The default is your local AppData folder. ' +
+    'If you''re on the office LAN and want to share the database with other users, pick the shared CAPEView folder instead. ' +
+    'You can change this later via File > Settings.',
+    False, '');
+  DbDirPage.Add('');
+  DbDirPage.Values[0] := ExpandConstant('{localappdata}\CAPEView');
+end;
+
+function GetDbDir(Param: string): string;
+begin
+  Result := DbDirPage.Values[0];
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  SettingsPath: string;
+  DbPath: string;
+  Json: string;
+  ExistingJson: AnsiString;
+begin
+  if CurStep = ssPostInstall then begin
+    SettingsPath := ExpandConstant('{localappdata}\CAPEView\settings.json');
+    // Idempotency guard: if a prior install already configured a DB path,
+    // leave it alone (handles silent updates from auto_update.py correctly).
+    if FileExists(SettingsPath) then begin
+      if LoadStringFromFile(SettingsPath, ExistingJson) and
+         (Pos('"database.path"', ExistingJson) > 0) then begin
+        Exit;
+      end;
+    end;
+    DbPath := AddBackslash(DbDirPage.Values[0]) + 'cape.db';
+    // Escape backslashes for JSON
+    StringChangeEx(DbPath, '\', '\\', True);
+    Json := '{' + #13#10 + '  "database.path": "' + DbPath + '"' + #13#10 + '}';
+    ForceDirectories(ExpandConstant('{localappdata}\CAPEView'));
+    SaveStringToFile(SettingsPath, Json, False);
+  end;
+end;
