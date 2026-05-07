@@ -70,9 +70,11 @@ SECTIONS: list[tuple[str, list[str]]] = [
             "    - api.github.com - auto-update version checks and signed installer "
             "downloads from the public ProcessLogicLabs/CAPEView Releases.",
             "Internal LAN only:",
-            "    - SMB to \\\\192.168.115.99\\scans\\Dev\\CAPEView\\Database\\cape.db "
-            "(shared SQLite database) and auth_users.json (access allowlist) at the "
-            "same path. Standard SMB over the existing office network.",
+            "    - SMB to a single LAN file share (path to be designated by IT) "
+            "hosting the shared SQLite database (cape.db) and the access "
+            "allowlist (auth_users.json). Standard SMB over the existing office "
+            "network. The path is configurable per install via the Settings "
+            "dialog or a CAPEVIEW_DB_PATH environment variable.",
         ],
     ),
     (
@@ -126,8 +128,9 @@ SECTIONS: list[tuple[str, list[str]]] = [
     (
         "Asks of IT",
         [
-            "Confirm the LAN share \\\\192.168.115.99\\scans\\Dev\\CAPEView\\Database is "
-            "included in the backup rotation.",
+            "Designate a LAN file share that will host the production cape.db "
+            "and auth_users.json files, and confirm that share is included in "
+            "the backup rotation.",
             "Confirm outbound HTTPS to api.github.com is permitted for the user "
             "population (typically already the case).",
             "No firewall rules, AD group provisioning, certificate issuance, or "
