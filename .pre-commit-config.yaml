@@ -1,0 +1,35 @@
+# Run on every git commit. Mirrors what CI (.github/workflows/ci.yml) does so
+# regressions never reach origin/main.
+#
+# One-time setup (after cloning):
+#     pip install pre-commit
+#     pre-commit install
+#
+# Ad-hoc / on demand:
+#     pre-commit run --all-files
+#
+# Skip for a single commit (use sparingly):
+#     git commit --no-verify
+
+repos:
+  # Ruff — same lint scope as CI (CAPEView/ + scripts/), auto-fixes import
+  # ordering and other safe issues so the user just re-stages and re-commits.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.0
+    hooks:
+      - id: ruff
+        name: ruff (CAPEView, scripts)
+        args: [--fix]
+        files: ^(CAPEView|scripts)/.*\.py$
+
+  # Pytest — full suite is currently <2s, well worth running on every commit
+  # rather than discovering test failures on push. Set always_run so the hook
+  # fires even when no .py file is staged (e.g. fixture data changes).
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: python -m pytest -q
+        language: system
+        pass_filenames: false
+        always_run: true
