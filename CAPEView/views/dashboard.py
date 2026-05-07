@@ -159,6 +159,7 @@ class DashboardView(QWidget):
             "claims_failed":        StatCard("CLAIMS WITH ERRORS"),
             "liq_due_30":           StatCard("LIQ DEADLINE ≤ 30 DAYS"),
             "rejected_open":        StatCard("REJECTED ENTRIES OPEN"),
+            "corrections_7d":       StatCard("CORRECTIONS (7D)"),
         }
         items = list(self.cards.values())
         for i, card in enumerate(items):
@@ -247,6 +248,19 @@ class DashboardView(QWidget):
                              "AND NOT EXISTS (SELECT 1 FROM entry_actions a "
                              "                WHERE a.entry_summary_number = c.entry_summary_number "
                              "                AND a.action_type = 'REJECTION_ACTIONED')")
+            )
+            # Corrections in the last 7 days: distinct claims that the CSV
+            # ingest transitioned out of a FAILED state. Source restricted to
+            # csv_ingest so user edits in audit_log don't double-count.
+            self.cards["corrections_7d"].set_value(
+                self._scalar(conn,
+                             "SELECT COUNT(DISTINCT row_key) FROM audit_log "
+                             "WHERE table_name = 'claims' "
+                             "  AND field = 'status' "
+                             "  AND user_id = 'csv_ingest' "
+                             "  AND UPPER(COALESCE(old_value,'')) = 'FAILED' "
+                             "  AND UPPER(COALESCE(new_value,'')) <> 'FAILED' "
+                             "  AND date(changed_at) >= date('now','-7 day')")
             )
             conn.close()
         except Exception as e:

@@ -137,6 +137,112 @@ def test_process_single_file_reports_parse_error(tmp_path, isolated_db):
     assert "required columns missing" in summary["errors"][0]
 
 
+def test_status_change_writes_audit_log(tmp_path, isolated_db):
+    """A claim transitioning Failed → Updated across two CSVs lands in audit_log."""
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+
+    # First file: claim is Failed
+    csv1 = inbox / "day1.csv"
+    write_csv(csv1, [
+        {"entry_summary_number": "60500002000", "claim_number": "X1",
+         "status": "Failed", "error_description": "UNABLE TO CALCULATE DUTY"},
+    ])
+    claims_csv_ingest.process_inbox(inbox)
+
+    # Second file: same key, now Entry Summary Updated and error cleared
+    csv2 = inbox / "day2.csv"
+    write_csv(csv2, [
+        {"entry_summary_number": "60500002000", "claim_number": "X1",
+         "status": "Entry Summary Updated", "error_description": ""},
+    ])
+    claims_csv_ingest.process_inbox(inbox)
+
+    conn = db.connect()
+    db.init_db(conn)
+    rows = conn.execute(
+        "SELECT field, old_value, new_value, user_id FROM audit_log "
+        "WHERE row_key = '60500002000|X1' ORDER BY id"
+    ).fetchall()
+    conn.close()
+
+    fields = [(r[0], r[1], r[2], r[3]) for r in rows]
+    assert ("status", "Failed", "Entry Summary Updated", "csv_ingest") in fields
+    # error_description went from a string to "" (treated as empty/None) — also tracked
+    assert any(f[0] == "error_description" and f[3] == "csv_ingest" for f in fields)
+
+
+def test_no_audit_log_on_unchanged_row(tmp_path, isolated_db):
+    """Re-ingesting an identical row produces no audit_log entries."""
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+
+    payload = [
+        {"entry_summary_number": "60500002100", "claim_number": "X2",
+         "status": "Failed", "error_description": "PROTEST ON ENTRY"},
+    ]
+    csv1 = inbox / "first.csv"
+    write_csv(csv1, payload)
+    claims_csv_ingest.process_inbox(inbox)
+
+    csv2 = inbox / "second.csv"
+    write_csv(csv2, payload)
+    claims_csv_ingest.process_inbox(inbox)
+
+    conn = db.connect()
+    db.init_db(conn)
+    cnt = conn.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE row_key = '60500002100|X2'"
+    ).fetchone()[0]
+    conn.close()
+    assert cnt == 0
+
+
+def test_manual_override_blocks_csv_audit(tmp_path, isolated_db):
+    """A manually-overridden row's CSV-driven changes are skipped entirely
+    (manual_override path only refreshes last_seen) so no audit row is written."""
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+
+    # Seed a row, then mark it manual_override via direct DB edit
+    csv1 = inbox / "seed.csv"
+    write_csv(csv1, [
+        {"entry_summary_number": "60500002200", "claim_number": "X3",
+         "status": "Failed", "error_description": "UNABLE TO CALCULATE DUTY"},
+    ])
+    claims_csv_ingest.process_inbox(inbox)
+
+    conn = db.connect()
+    db.init_db(conn)
+    conn.execute(
+        "UPDATE claims SET manual_override = 1 "
+        "WHERE entry_summary_number = '60500002200' AND claim_number = 'X3'"
+    )
+    conn.close()
+
+    # Now the upstream CSV would correct it — should be ignored
+    csv2 = inbox / "would_correct.csv"
+    write_csv(csv2, [
+        {"entry_summary_number": "60500002200", "claim_number": "X3",
+         "status": "Entry Summary Updated", "error_description": ""},
+    ])
+    claims_csv_ingest.process_inbox(inbox)
+
+    conn = db.connect()
+    db.init_db(conn)
+    cnt = conn.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE row_key = '60500002200|X3'"
+    ).fetchone()[0]
+    # Status preserved at Failed
+    status = conn.execute(
+        "SELECT status FROM claims "
+        "WHERE entry_summary_number = '60500002200' AND claim_number = 'X3'"
+    ).fetchone()[0]
+    conn.close()
+    assert cnt == 0
+    assert status == "Failed"
+
+
 def test_resolve_columns_handles_aliases(tmp_path, isolated_db):
     inbox = tmp_path / "inbox"
     inbox.mkdir()

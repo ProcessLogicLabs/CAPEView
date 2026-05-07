@@ -231,6 +231,9 @@ def now_iso() -> str:
 # Upsert helpers used by ingestion jobs
 # ----------------------------------------------------------------------
 
+CSV_INGEST_USER_ID = "csv_ingest"
+
+
 def upsert_claims(conn: sqlite3.Connection, rows: list[dict]) -> tuple[int, int]:
     """Upsert claim rows from a CSV ingest. Returns (inserted, updated).
 
@@ -240,6 +243,11 @@ def upsert_claims(conn: sqlite3.Connection, rows: list[dict]) -> tuple[int, int]
     ``status`` / ``error_description`` / ``notes`` values are preserved and
     only ``last_seen`` is bumped. This lets compliance officers correct a row
     without losing their edit on the next CSV cycle.
+
+    Status / error_description changes on non-overridden rows are recorded
+    to ``audit_log`` with ``user_id = 'csv_ingest'``. This makes inter-CSV
+    transitions queryable — e.g. counting Failed → not-Failed corrections
+    over a time window.
     """
     inserted = 0
     updated = 0
@@ -247,7 +255,7 @@ def upsert_claims(conn: sqlite3.Connection, rows: list[dict]) -> tuple[int, int]
     with transaction(conn):
         for row in rows:
             existing = conn.execute(
-                "SELECT manual_override FROM claims "
+                "SELECT manual_override, status, error_description FROM claims "
                 "WHERE entry_summary_number = ? AND claim_number = ?",
                 (row["entry_summary_number"], row["claim_number"]),
             ).fetchone()
@@ -260,12 +268,36 @@ def upsert_claims(conn: sqlite3.Connection, rows: list[dict]) -> tuple[int, int]
                         (ts, row["entry_summary_number"], row["claim_number"]),
                     )
                 else:
+                    new_status = row.get("status")
+                    new_err = row.get("error_description")
+                    old_status = existing[1]
+                    old_err = existing[2]
+
                     conn.execute(
                         "UPDATE claims SET status = ?, error_description = ?, last_seen = ? "
                         "WHERE entry_summary_number = ? AND claim_number = ?",
-                        (row.get("status"), row.get("error_description"), ts,
+                        (new_status, new_err, ts,
                          row["entry_summary_number"], row["claim_number"]),
                     )
+
+                    # Record audit_log entries for the actual transitions so
+                    # we can surface "previously failed claim now corrected"
+                    # without scanning the claims table at query time.
+                    row_key = f"{row['entry_summary_number']}|{row['claim_number']}"
+                    if old_status != new_status:
+                        conn.execute(
+                            "INSERT INTO audit_log (user_id, table_name, row_key, field, "
+                            " old_value, new_value, changed_at) "
+                            "VALUES (?, 'claims', ?, 'status', ?, ?, ?)",
+                            (CSV_INGEST_USER_ID, row_key, old_status, new_status, ts),
+                        )
+                    if old_err != new_err:
+                        conn.execute(
+                            "INSERT INTO audit_log (user_id, table_name, row_key, field, "
+                            " old_value, new_value, changed_at) "
+                            "VALUES (?, 'claims', ?, 'error_description', ?, ?, ?)",
+                            (CSV_INGEST_USER_ID, row_key, old_err, new_err, ts),
+                        )
                 updated += 1
             else:
                 conn.execute(
