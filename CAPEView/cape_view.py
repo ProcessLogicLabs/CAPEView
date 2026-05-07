@@ -135,8 +135,9 @@ class CAPEView(QMainWindow):
             f"{APP_NAME} {VERSION} — signed in as {self.current_user}", 5000
         )
 
-        # Dashboard surfaces drop-zone results through the status bar
+        # Dashboard and Reports surface long-running results through the status bar
         self.dashboard.status_message.connect(self.status_bar.showMessage)
+        self.reports.status_message.connect(self.status_bar.showMessage)
 
         # Ctrl+Shift+A opens the access-administration dialog (admins only)
         self._admin_shortcut = QShortcut(QKeySequence("Ctrl+Shift+A"), self)
