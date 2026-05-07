@@ -243,6 +243,42 @@ def test_manual_override_blocks_csv_audit(tmp_path, isolated_db):
     assert status == "Failed"
 
 
+def test_unwrap_excel_text_strips_wrapper():
+    from CAPEView.claims_csv_ingest import _unwrap_excel_text
+    assert _unwrap_excel_text('="60576069342"') == "60576069342"
+    assert _unwrap_excel_text('  ="100000241223"  ') == "100000241223"
+    assert _unwrap_excel_text("60576072486") == "60576072486"  # already clean
+    assert _unwrap_excel_text("") == ""
+    assert _unwrap_excel_text(None) == ""
+
+
+def test_parse_csv_strips_excel_text_wrapper(tmp_path, isolated_db):
+    """ACE Portal exports use ``="..."`` to force-text numeric strings.
+    The parser must unwrap them so DB keys match clean rows."""
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    csv = inbox / "ace_export.csv"
+    csv.write_text(
+        'ENTRY_NUMBER,CLAIM_NUMBER,STATUS,ERROR_DESCRIPTION\n'
+        '="60576069342",="100000241223",Failed,HTS RELATIONSHIP/SEQUENCE MISMATCH\n',
+        encoding="utf-8",
+    )
+    summary = claims_csv_ingest.process_inbox(inbox)
+    assert summary["inserted"] == 1
+
+    conn = db.connect()
+    db.init_db(conn)
+    row = conn.execute(
+        "SELECT entry_summary_number, claim_number, status, error_description "
+        "FROM claims"
+    ).fetchone()
+    conn.close()
+    assert row[0] == "60576069342"
+    assert row[1] == "100000241223"
+    assert row[2] == "Failed"
+    assert row[3] == "HTS RELATIONSHIP/SEQUENCE MISMATCH"
+
+
 def test_resolve_columns_handles_aliases(tmp_path, isolated_db):
     inbox = tmp_path / "inbox"
     inbox.mkdir()

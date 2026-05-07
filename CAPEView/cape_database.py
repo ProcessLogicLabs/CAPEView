@@ -393,6 +393,81 @@ def upsert_entries(conn: sqlite3.Connection, rows: list[dict]) -> tuple[int, int
     return inserted, updated
 
 
+def _unwrap_excel(value):
+    """Strip Excel's ``="..."`` text-format wrapper. Used by the cleanup helper
+    below to fix rows ingested before claims_csv_ingest learned to unwrap."""
+    if not isinstance(value, str):
+        return value
+    s = value.strip()
+    if len(s) >= 3 and s.startswith('="') and s.endswith('"'):
+        return s[2:-1]
+    return s
+
+
+def cleanup_excel_quoted_keys(conn: sqlite3.Connection) -> dict:
+    """One-shot fixup for claims rows whose key/text fields still hold the
+    raw Excel ``="..."`` wrapper (ingested before that escape was handled).
+
+    For each polluted row:
+        * If a clean (entry_summary_number, claim_number) row already
+          exists → DELETE the polluted duplicate.
+        * Else → UPDATE entry_summary_number / claim_number / status /
+          error_description in place.
+
+    Idempotent — re-running on already-clean data is a no-op.
+    Returns counts: ``{"updated": int, "deleted_duplicates": int}``.
+    """
+    summary = {"updated": 0, "deleted_duplicates": 0}
+
+    polluted = conn.execute(
+        "SELECT entry_summary_number, claim_number, status, error_description "
+        "FROM claims "
+        "WHERE entry_summary_number LIKE '=\"%' "
+        "   OR claim_number LIKE '=\"%' "
+        "   OR status LIKE '=\"%' "
+        "   OR error_description LIKE '=\"%'"
+    ).fetchall()
+
+    if not polluted:
+        return summary
+
+    with transaction(conn):
+        for r in polluted:
+            old_esn = r["entry_summary_number"]
+            old_claim = r["claim_number"]
+            new_esn = _unwrap_excel(old_esn)
+            new_claim = _unwrap_excel(old_claim)
+            new_status = _unwrap_excel(r["status"])
+            new_err = _unwrap_excel(r["error_description"])
+
+            keys_changed = (new_esn, new_claim) != (old_esn, old_claim)
+
+            if keys_changed:
+                conflict = conn.execute(
+                    "SELECT 1 FROM claims "
+                    "WHERE entry_summary_number = ? AND claim_number = ?",
+                    (new_esn, new_claim),
+                ).fetchone()
+                if conflict:
+                    conn.execute(
+                        "DELETE FROM claims "
+                        "WHERE entry_summary_number = ? AND claim_number = ?",
+                        (old_esn, old_claim),
+                    )
+                    summary["deleted_duplicates"] += 1
+                    continue
+
+            conn.execute(
+                "UPDATE claims SET "
+                "  entry_summary_number = ?, claim_number = ?, "
+                "  status = ?, error_description = ? "
+                "WHERE entry_summary_number = ? AND claim_number = ?",
+                (new_esn, new_claim, new_status, new_err, old_esn, old_claim),
+            )
+            summary["updated"] += 1
+    return summary
+
+
 def record_import_run(
     conn: sqlite3.Connection,
     source: str,

@@ -65,6 +65,22 @@ def _norm(s: str) -> str:
     return s.strip().lower().replace("-", "_").replace(" ", "_")
 
 
+def _unwrap_excel_text(value: str | None) -> str:
+    """Strip the ``="..."`` wrapper Excel uses to force a CSV cell to text.
+
+    ACE Portal exports the Claim Details CSV with this wrapper around
+    entry numbers and claim numbers so Excel won't auto-convert them to
+    scientific notation. csv.DictReader passes the raw cell through, so
+    we need to undo the escape ourselves before persisting.
+    """
+    if not value:
+        return ""
+    s = value.strip()
+    if len(s) >= 3 and s.startswith('="') and s.endswith('"'):
+        return s[2:-1]
+    return s
+
+
 def _resolve_columns(fieldnames: list[str]) -> dict[str, str]:
     """Map our canonical names to the CSV's actual column names."""
     norm_to_actual = {_norm(c): c for c in fieldnames}
@@ -92,18 +108,18 @@ def parse_csv(path: Path) -> list[dict]:
                 f"Found: {reader.fieldnames}"
             )
         for raw in reader:
-            esn = (raw.get(col_map["entry_summary_number"]) or "").strip()
-            claim = (raw.get(col_map["claim_number"]) or "").strip()
+            esn = _unwrap_excel_text(raw.get(col_map["entry_summary_number"]))
+            claim = _unwrap_excel_text(raw.get(col_map["claim_number"]))
             if not esn or not claim:
                 continue
             rows.append(
                 {
                     "entry_summary_number": esn,
                     "claim_number": claim,
-                    "status": (raw.get(col_map.get("status", "")) or "").strip() or None,
-                    "error_description": (
-                        raw.get(col_map.get("error_description", "")) or ""
-                    ).strip() or None,
+                    "status": _unwrap_excel_text(raw.get(col_map.get("status", ""))) or None,
+                    "error_description": _unwrap_excel_text(
+                        raw.get(col_map.get("error_description", ""))
+                    ) or None,
                 }
             )
     return rows

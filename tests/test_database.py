@@ -29,6 +29,66 @@ def test_init_db_creates_all_tables(tmp_db):
     } <= names
 
 
+def test_cleanup_excel_quoted_keys_unwraps_in_place(tmp_db):
+    """Polluted row → updated to clean values."""
+    ts = db.now_iso()
+    tmp_db.execute(
+        "INSERT INTO claims (entry_summary_number, claim_number, status, "
+        " error_description, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
+        ('="60576069342"', '="100000241223"', "Failed",
+         "HTS RELATIONSHIP/SEQUENCE MISMATCH", ts, ts),
+    )
+
+    result = db.cleanup_excel_quoted_keys(tmp_db)
+
+    row = tmp_db.execute(
+        "SELECT entry_summary_number, claim_number FROM claims"
+    ).fetchone()
+    assert row[0] == "60576069342"
+    assert row[1] == "100000241223"
+    assert result == {"updated": 1, "deleted_duplicates": 0}
+
+
+def test_cleanup_excel_quoted_keys_drops_duplicates(tmp_db):
+    """Polluted + clean equivalent → polluted is deleted, clean kept."""
+    ts = db.now_iso()
+    # Clean row already exists
+    tmp_db.execute(
+        "INSERT INTO claims (entry_summary_number, claim_number, status, "
+        " error_description, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
+        ("60576069342", "100000241223", "Failed", "FOO", ts, ts),
+    )
+    # Polluted duplicate ingested before the parser fix
+    tmp_db.execute(
+        "INSERT INTO claims (entry_summary_number, claim_number, status, "
+        " error_description, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
+        ('="60576069342"', '="100000241223"', "Failed", "BAR", ts, ts),
+    )
+
+    result = db.cleanup_excel_quoted_keys(tmp_db)
+
+    rows = tmp_db.execute(
+        "SELECT entry_summary_number, claim_number, error_description "
+        "FROM claims ORDER BY entry_summary_number"
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "60576069342"
+    assert rows[0][2] == "FOO"  # kept the clean row, not the polluted one
+    assert result == {"updated": 0, "deleted_duplicates": 1}
+
+
+def test_cleanup_excel_quoted_keys_idempotent(tmp_db):
+    """Re-running on already-clean data is a no-op."""
+    ts = db.now_iso()
+    tmp_db.execute(
+        "INSERT INTO claims (entry_summary_number, claim_number, status, "
+        " error_description, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
+        ("60576069342", "100000241223", "Failed", "FOO", ts, ts),
+    )
+    result = db.cleanup_excel_quoted_keys(tmp_db)
+    assert result == {"updated": 0, "deleted_duplicates": 0}
+
+
 def test_upsert_claims_inserts_then_updates(tmp_db):
     rows = [
         {"entry_summary_number": "60500000001", "claim_number": "100",
