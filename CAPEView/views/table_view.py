@@ -629,8 +629,9 @@ class ClaimsView(SQLTableView):
 class ComplianceView(SQLTableView):
     title = "Compliance — Rejected Claims Needing Action"
     headers = ["Entry Summary #", "Claim #", "Status", "Error Description",
-               "DIV", "Last Seen", "Importer Name"]
+               "DIV", "CAPE LIQ Deadline", "Total Liq Duty", "Importer Name"]
     placeholder = "Filter by entry, error, or importer..."
+    currency_columns = [6]  # Total Liq Duty
     status_filters = _importer_filters()
 
     def __init__(self, parent=None):
@@ -640,7 +641,8 @@ class ComplianceView(SQLTableView):
     def build_query(self, filter_text, status_filters):
         sql = (
             "SELECT c.entry_summary_number, c.claim_number, c.status, "
-            "       c.error_description, e.div, c.last_seen, e.importer_name "
+            "       c.error_description, e.div, e.cape_liq_deadline, "
+            "       e.total_liquidated_duty, e.importer_name "
             "FROM claims c "
             "LEFT JOIN entries e ON e.entry_summary_number = c.entry_summary_number "
             "LEFT JOIN importer_status i ON i.importer_number = e.importer_number "
@@ -661,11 +663,19 @@ class ComplianceView(SQLTableView):
             sql += "AND e.div = ? "
             params.append(div_val)
         sql, params = _apply_importer_filters(sql, params, status_filters)
-        sql += f"ORDER BY c.last_seen DESC LIMIT {self.row_limit}"
+        # Default sort: most-urgent deadline first (NULLs at the bottom).
+        # Replaces the prior last_seen DESC, which gave low signal here since
+        # most rejected claims share the same recent ingest timestamp.
+        sql += ("ORDER BY e.cape_liq_deadline IS NULL, e.cape_liq_deadline ASC "
+                f"LIMIT {self.row_limit}")
         return sql, tuple(params)
 
-    def color_row(self, _row):
-        return URGENCY_OVERDUE  # everything in this view needs action
+    def color_row(self, row):
+        # Urgency tint by CAPE LIQ Deadline so the most-urgent rejects float
+        # to the top visually as well as positionally. Rows with no deadline
+        # (e.g. unliquidated entries that somehow have a Failed claim) render
+        # neutral.
+        return deadline_urgency(row[5])  # cape_liq_deadline column
 
 
 class ImportersView(SQLTableView):
