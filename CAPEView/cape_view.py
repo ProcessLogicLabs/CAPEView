@@ -150,6 +150,11 @@ class CAPEView(QMainWindow):
         menu_bar = self.menuBar()
 
         file_menu = menu_bar.addMenu("&File")
+        export_action = QAction("&Export Current View...", self)
+        export_action.setShortcut("Ctrl+E")
+        export_action.triggered.connect(self._export_active_tab)
+        file_menu.addAction(export_action)
+        file_menu.addSeparator()
         settings_action = QAction("&Settings...", self)
         settings_action.setShortcut("Ctrl+,")
         settings_action.triggered.connect(self._open_settings)
@@ -170,6 +175,22 @@ class CAPEView(QMainWindow):
     def _open_settings(self):
         dlg = SettingsDialog(self)
         dlg.exec_()
+
+    def _export_active_tab(self):
+        """Ctrl+E and File → Export — delegates to whichever tab is active."""
+        widget = self.tabs.currentWidget()
+        export = getattr(widget, "export_with_dialog", None)
+        if callable(export):
+            export()
+            return
+        QMessageBox.information(
+            self,
+            "Export Current View",
+            f"The {self.tabs.tabText(self.tabs.currentIndex())} tab does not "
+            "support exporting. Switch to a data tab (Entries, Claims, "
+            "Compliance, Refunds, Protests, Importers, or Deadlines) and "
+            "try again.",
+        )
 
     def _open_admin_dialog(self):
         cfg = auth.load()

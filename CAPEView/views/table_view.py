@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QBrush, QColor, QFont
 from PyQt5.QtWidgets import (
     QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -33,6 +35,7 @@ from PyQt5.QtWidgets import (
 
 from CAPEView import auth
 from CAPEView import cape_database as db
+from CAPEView import export_view
 from CAPEView.theme import style as button_style
 
 # ---------------------------------------------------------------------------
@@ -237,6 +240,12 @@ class SQLTableView(QWidget):
         self.refresh_button.setStyleSheet(button_style("info"))
         self.refresh_button.clicked.connect(self.refresh)
         header_row.addWidget(self.refresh_button)
+
+        self.export_button = QPushButton("Export...")
+        self.export_button.setToolTip("Export the rows currently shown (Ctrl+E)")
+        self.export_button.setStyleSheet(button_style("secondary"))
+        self.export_button.clicked.connect(self.export_with_dialog)
+        header_row.addWidget(self.export_button)
         outer.addLayout(header_row)
 
         # Filter combos row (only rendered if status_filters non-empty)
@@ -320,6 +329,72 @@ class SQLTableView(QWidget):
     # ----- main refresh -------------------------------------------------------
     def current_status_filters(self) -> dict[str, object]:
         return {key: combo.currentData() for key, combo in self._filter_widgets.items()}
+
+    # ----- export -------------------------------------------------------------
+    def export_with_dialog(self) -> None:
+        """Show Save dialog, then export current view contents to xlsx or csv
+        (chosen by file extension). Called from the toolbar button and from the
+        main window's Ctrl+E shortcut."""
+        slug = re.sub(r"[^A-Za-z0-9]+", "_", self.title).strip("_") or "export"
+        default = f"{slug}_{datetime.now():%Y%m%d_%H%M}.xlsx"
+        target, _ = QFileDialog.getSaveFileName(
+            self,
+            f"Export {self.title}",
+            str(Path.home() / "Documents" / default),
+            "Excel Workbook (*.xlsx);;CSV (*.csv)",
+        )
+        if not target:
+            return
+        try:
+            n = self.export_current_view(Path(target))
+        except Exception as e:
+            self.status.setText(f"Export failed: {e}")
+            return
+        self.status.setText(f"Exported {n} row(s) to {target}")
+
+    def export_current_view(self, path: Path) -> int:
+        """Walk the QTableWidget (post-filter, post-sort) and dump to xlsx
+        or csv based on ``path``'s extension. Returns the row count exported.
+
+        Tint fills are read off each row's column-0 item background — that's
+        where ``refresh()`` puts them via ``color_row()``. WYSIWYG: the
+        exported file mirrors what the user is currently looking at."""
+        n_rows = self.table.rowCount()
+        n_cols = self.table.columnCount()
+
+        rows: list[list[str]] = []
+        row_colors: list[str | None] = []
+        for r in range(n_rows):
+            row: list[str] = []
+            for c in range(n_cols):
+                item = self.table.item(r, c)
+                row.append(item.text() if item is not None else "")
+            rows.append(row)
+            row_colors.append(self._row_tint_hex(r))
+
+        suffix = path.suffix.lower()
+        if suffix == ".csv":
+            export_view.write_csv(path, list(self.headers), rows)
+        else:
+            if suffix != ".xlsx":
+                path = path.with_suffix(".xlsx")
+            export_view.write_xlsx(
+                path, self.title, list(self.headers), rows, row_colors=row_colors,
+            )
+        return n_rows
+
+    def _row_tint_hex(self, r: int) -> str | None:
+        """Return ``#RRGGBB`` for the row's urgency tint, or None if untinted."""
+        item = self.table.item(r, 0)
+        if item is None:
+            return None
+        brush = item.background()
+        if brush is None or brush.style() == Qt.NoBrush:
+            return None
+        color = brush.color()
+        if color.alpha() == 0:
+            return None
+        return color.name()  # "#rrggbb"
 
     def refresh(self):
         try:
