@@ -44,7 +44,13 @@ Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\_internal\Resources\icon.ico"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
+; Manual install: shows the "Launch CAPEView" checkbox on the final wizard page
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent runasoriginaluser shellexec
+; Silent install (auto-update path): /VERYSILENT skips the postinstall checkbox
+; above and Restart Manager only restarts apps it closed itself, so without
+; this we'd leave the user with no running app after auto-update. Check:
+; WizardSilent ensures this fires only during silent installs.
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait runasoriginaluser shellexec; Check: WizardSilent
 
 [Code]
 var
