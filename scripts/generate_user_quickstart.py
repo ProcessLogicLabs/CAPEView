@@ -73,16 +73,15 @@ SECTIONS: list[tuple[str, list[str]]] = [
         ],
     ),
     (
-        "Editing Claims",
+        "Reviewing Claims",
         [
-            "Open the Claims tab. Three columns are editable: Status, Error "
-            "Description, and Notes. Click into a cell, type, and press Enter.",
-            "Every edit is recorded with your domain identity, the timestamp, "
-            "and the old/new value - this is the audit trail.",
-            "Your edits are protected: an edited row is marked with a Y in the "
-            "Manual column, and the next CSV import will NOT overwrite it. "
-            "If you want the upstream value to take over again, change the row "
-            "back to its original value or ask the admin to clear the override.",
+            "The Claims tab is read-only. Status, Error Description, and the "
+            "other claim fields come from the ACE Portal CSV imports - that's "
+            "the single source of truth.",
+            "If you want to track your own follow-up notes against specific "
+            "claims, use Ctrl+E to export the current view to Excel and "
+            "annotate there. The Notes column header is included in the "
+            "export so you have a slot to fill in.",
         ],
     ),
     (
@@ -147,8 +146,8 @@ SECTIONS: list[tuple[str, list[str]]] = [
     (
         "Need help?",
         [
-            "Tell your CAPEView admin (currently Heath Payne, Special Projects "
-            "Manager). For urgent issues - locked out, can't see your importer's "
+            "Tell your CAPEView admin (currently Heath Payne, Project "
+            "Contact). For urgent issues - locked out, can't see your importer's "
             "data, error on import - the admin can usually unblock you in a few "
             "minutes.",
         ],

@@ -311,49 +311,6 @@ def upsert_claims(conn: sqlite3.Connection, rows: list[dict]) -> tuple[int, int]
     return inserted, updated
 
 
-def update_claim_field(
-    conn: sqlite3.Connection,
-    entry_summary_number: str,
-    claim_number: str,
-    field: str,
-    new_value: str | None,
-    user_id: str,
-) -> bool:
-    """User-driven edit of a claim field. Sets ``manual_override = 1`` and
-    appends an ``audit_log`` row. Returns True if a row was updated.
-
-    Allowed fields: status, error_description, notes.
-    """
-    if field not in ("status", "error_description", "notes"):
-        raise ValueError(f"field {field!r} is not user-editable")
-
-    cur = conn.execute(
-        f"SELECT {field} FROM claims WHERE entry_summary_number = ? AND claim_number = ?",
-        (entry_summary_number, claim_number),
-    ).fetchone()
-    if cur is None:
-        return False
-    old_value = cur[0]
-    if old_value == new_value:
-        return False
-    ts = now_iso()
-    with transaction(conn):
-        conn.execute(
-            f"UPDATE claims SET {field} = ?, manual_override = 1, "
-            f"  updated_at = ?, updated_by = ? "
-            f"WHERE entry_summary_number = ? AND claim_number = ?",
-            (new_value, ts, user_id, entry_summary_number, claim_number),
-        )
-        conn.execute(
-            "INSERT INTO audit_log (user_id, table_name, row_key, field, "
-            " old_value, new_value, changed_at) "
-            "VALUES (?, 'claims', ?, ?, ?, ?, ?)",
-            (user_id, f"{entry_summary_number}|{claim_number}", field,
-             old_value, new_value, ts),
-        )
-    return True
-
-
 def upsert_entries(conn: sqlite3.Connection, rows: list[dict]) -> tuple[int, int]:
     """Upsert entry rows by entry_summary_number."""
     inserted = 0

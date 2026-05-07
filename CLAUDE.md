@@ -79,9 +79,12 @@ CAPEView.spec, CAPEView_setup.iss, pyproject.toml, requirements.txt
   migration's `_liq_plus_days` helper handles this correctly.
 - **`final_liquidation_date`** in the workbook **is** correct (it's not a
   formula). Read it directly.
-- **`claims.manual_override = 1`** locks user-edited rows from the daily
-  CSV ingest. `upsert_claims` checks this flag and only updates `last_seen`
-  for overridden rows. Every user edit also appends an `audit_log` row.
+- **Claims data is read-only in the UI.** ACE Portal CSV imports are the
+  authoritative source; the Claims tab no longer surfaces editable cells.
+  The legacy `claims.manual_override` / `claims.notes` / `claims.updated_at`
+  / `claims.updated_by` columns remain in the schema for historical data
+  but are never written by the running app. `upsert_claims` still honors
+  any pre-existing `manual_override = 1` rows (defensive for old data).
 - **Importer-status flags** (`self_filer`, `ace_account`, `ach_details_in_ace`,
   `is_4811_client`, `psc_for_4811`) are stored as **INTEGER 0/1** for
   fast filtering; rendered as **Y/N** by `format_flag()` and the
@@ -108,18 +111,17 @@ CAPEView.spec, CAPEView_setup.iss, pyproject.toml, requirements.txt
   style ignores `QPalette` for `QHeaderView`, which produces invisible
   white-on-white headers without the override.
 
-### Editable claims
+### Identity & audit
 
-- `update_claim_field(conn, esn, claim, field, value, user_id)` is the
-  **only** way to user-edit a claim. Allowed fields: `status`,
-  `error_description`, `notes`. Other fields raise `ValueError`.
-- `ClaimsView` hooks `QTableWidget.itemChanged` and calls
-  `update_claim_field` per edit. The `_suppress_changes` guard prevents
-  the bulk-repopulate in `refresh()` from firing one save per cell.
-- User identity for `audit_log.user_id` currently comes from
-  `getpass.getuser()`. Replace with auth-managed identity once auth is
-  wired (the open-tariffmill `auth_users.json` pattern is the planned
-  source).
+- The auth gate (`CAPEView/auth.py`) captures `DOMAIN\username` from the
+  Windows session via `USERDOMAIN` / `USERNAME` env vars and uses that as
+  the audit identity. There is no app-level login prompt — Kerberos via
+  the Windows session handles it.
+- `audit_log` is currently written only by `upsert_claims` when CSV
+  imports change a claim's status / error_description (tagged
+  `user_id='csv_ingest'`). The Dashboard's CORRECTIONS (7D) and
+  NEW REJECTS (7D) cards query this. There is no user-edit write path
+  today; Claims are read-only.
 
 ### Tests
 

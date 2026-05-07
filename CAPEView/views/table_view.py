@@ -33,8 +33,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from CAPEView import auth, export_view
 from CAPEView import cape_database as db
+from CAPEView import export_view
 from CAPEView.theme import style as button_style
 
 # ---------------------------------------------------------------------------
@@ -114,15 +114,6 @@ URGENCY_DUE_30  = QColor(252, 235, 196)   # amber
 URGENCY_DUE_60  = QColor(252, 246, 220)   # pale amber
 URGENCY_OK      = QColor(220, 240, 226)   # soft green
 URGENCY_NEUTRAL = None
-
-
-def _current_user() -> str:
-    """User attribution for audit_log. Returns ``DOMAIN\\username`` from the
-    Windows session via :mod:`CAPEView.auth`."""
-    try:
-        return auth.current_user() or "local"
-    except Exception:
-        return "local"
 
 
 _ISO_DATE_RE     = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
@@ -573,7 +564,7 @@ class ClaimsView(SQLTableView):
     title = "Claims"
     headers = [
         "Entry Summary #", "Claim #", "Status", "Error Description",
-        "Notes", "Manual", "DIV", "First Seen", "Last Seen",
+        "Notes", "DIV", "First Seen", "Last Seen",
     ]
     placeholder = "Filter by entry, claim, or error..."
     status_filters = [
@@ -583,30 +574,20 @@ class ClaimsView(SQLTableView):
              ("Updated", "Entry Summary Updated"),
              ("Failed", "Failed")],
         ),
-        FilterSpec(
-            "Manual edits", "manual_override",
-            [("Any", None), ("Edited only", 1), ("Untouched only", 0)],
-        ),
     ]
-
-    # Column indices that are user-editable (Status, Error Description, Notes).
-    # DIV was inserted at index 6 — purely display, kept after the editable cells
-    # so these indices don't shift.
-    EDITABLE_COLUMNS = (2, 3, 4)
-    EDITABLE_FIELD = {2: "status", 3: "error_description", 4: "notes"}
 
     def __init__(self, parent=None):
         self.status_filters = list(type(self).status_filters) + [_div_filter_spec()]
         super().__init__(parent)
-        # Hook the model edit signal AFTER the base class created self.table
-        self.table.itemChanged.connect(self._on_item_changed)
-        self._suppress_changes = False
 
     def build_query(self, filter_text, status_filters):
+        # Notes column kept in the projection for export-readiness even though
+        # it is no longer user-editable — the legacy claims.notes column may
+        # hold historical values and the column header gives users a slot to
+        # fill in their own annotations after exporting via Ctrl+E.
         sql = (
             "SELECT c.entry_summary_number, c.claim_number, c.status, c.error_description, "
             "       COALESCE(c.notes,''), "
-            "       CASE WHEN c.manual_override = 1 THEN 'Y' ELSE '' END, "
             "       e.div, "
             "       c.first_seen, c.last_seen "
             "FROM claims c "
@@ -618,10 +599,6 @@ class ClaimsView(SQLTableView):
         if status_val is not None:
             sql += "AND c.status = ? "
             params.append(status_val)
-        manual_val = status_filters.get("manual_override")
-        if manual_val is not None:
-            sql += "AND c.manual_override = ? "
-            params.append(int(manual_val))
         div_val = status_filters.get("div")
         if div_val:
             sql += "AND e.div = ? "
@@ -647,68 +624,6 @@ class ClaimsView(SQLTableView):
         if status == "ENTRY SUMMARY UPDATED":
             return URGENCY_OK
         return None
-
-    # ----- editable behavior --------------------------------------------------
-    def refresh(self):
-        """Suppress itemChanged while we repopulate the table; otherwise the
-        bulk insertion would fire a write per cell."""
-        self._suppress_changes = True
-        try:
-            super().refresh()
-            for r in range(self.table.rowCount()):
-                for c in range(self.table.columnCount()):
-                    item = self.table.item(r, c)
-                    if item is None:
-                        continue
-                    flags = item.flags()
-                    if c in self.EDITABLE_COLUMNS:
-                        item.setFlags(flags | Qt.ItemIsEditable)
-                    else:
-                        item.setFlags(flags & ~Qt.ItemIsEditable)
-        finally:
-            self._suppress_changes = False
-
-    def _on_item_changed(self, item: QTableWidgetItem):
-        if self._suppress_changes:
-            return
-        col = item.column()
-        if col not in self.EDITABLE_COLUMNS:
-            return
-        row = item.row()
-        esn_item = self.table.item(row, 0)
-        claim_item = self.table.item(row, 1)
-        if esn_item is None or claim_item is None:
-            return
-        field = self.EDITABLE_FIELD[col]
-        new_value = item.text() or None
-
-        try:
-            conn = db.connect()
-            db.init_db(conn)
-            updated = db.update_claim_field(
-                conn,
-                entry_summary_number=esn_item.text(),
-                claim_number=claim_item.text(),
-                field=field,
-                new_value=new_value,
-                user_id=_current_user(),
-            )
-            conn.close()
-        except Exception as e:
-            self.status.setText(f"Save failed: {e}")
-            return
-
-        if updated:
-            self.status.setText(
-                f"Saved {field} on {esn_item.text()}/{claim_item.text()} "
-                f"(by {_current_user()})"
-            )
-            # Reflect manual_override='Y' immediately without a full refresh
-            manual_item = self.table.item(row, 5)
-            if manual_item is not None:
-                self._suppress_changes = True
-                manual_item.setText("Y")
-                self._suppress_changes = False
 
 
 class ComplianceView(SQLTableView):
