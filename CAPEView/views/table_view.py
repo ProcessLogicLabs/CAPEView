@@ -12,7 +12,6 @@ QSS (Qt's native Windows style ignores QPalette for QHeaderView), row coloring.
 
 from __future__ import annotations
 
-import getpass
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -32,6 +31,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from CAPEView import auth
 from CAPEView import cape_database as db
 from CAPEView.theme import style as button_style
 
@@ -71,9 +71,10 @@ URGENCY_NEUTRAL = None
 
 
 def _current_user() -> str:
-    """Best-effort user attribution for audit_log. Auth wiring will replace this."""
+    """User attribution for audit_log. Returns ``DOMAIN\\username`` from the
+    Windows session via :mod:`CAPEView.auth`."""
     try:
-        return getpass.getuser() or "local"
+        return auth.current_user() or "local"
     except Exception:
         return "local"
 

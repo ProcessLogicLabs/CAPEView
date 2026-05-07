@@ -21,24 +21,27 @@ if sys.platform == "win32":
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QFont, QIcon
+from PyQt5.QtGui import QFont, QIcon, QKeySequence
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
     QMainWindow,
     QMessageBox,
+    QShortcut,
     QStatusBar,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from CAPEView import auth
 from CAPEView import cape_database as db
 from CAPEView.animated_splash import AnimatedMillSplash
 from CAPEView.auto_update import AutoUpdateManager
 from CAPEView.settings_dialog import SettingsDialog
 from CAPEView.theme import apply_theme
 from CAPEView.version import get_version
+from CAPEView.views.admin_dialog import AdminDialog
 from CAPEView.views.dashboard import DashboardView
 from CAPEView.views.reports import ReportsView
 from CAPEView.views.table_view import (
@@ -127,10 +130,17 @@ class CAPEView(QMainWindow):
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage(f"{APP_NAME} {VERSION} ready", 5000)
+        self.current_user = auth.current_user()
+        self.status_bar.showMessage(
+            f"{APP_NAME} {VERSION} — signed in as {self.current_user}", 5000
+        )
 
         # Dashboard surfaces drop-zone results through the status bar
         self.dashboard.status_message.connect(self.status_bar.showMessage)
+
+        # Ctrl+Shift+A opens the access-administration dialog (admins only)
+        self._admin_shortcut = QShortcut(QKeySequence("Ctrl+Shift+A"), self)
+        self._admin_shortcut.activated.connect(self._open_admin_dialog)
 
         self.update_manager = None
 
@@ -158,6 +168,19 @@ class CAPEView(QMainWindow):
 
     def _open_settings(self):
         dlg = SettingsDialog(self)
+        dlg.exec_()
+
+    def _open_admin_dialog(self):
+        cfg = auth.load()
+        if not auth.is_admin(self.current_user, cfg):
+            QMessageBox.information(
+                self,
+                "CAPEView Access Administration",
+                f"<b>{self.current_user}</b> is not an administrator.<br><br>"
+                f"Ask a CAPEView admin to add you to the admins list.",
+            )
+            return
+        dlg = AdminDialog(self)
         dlg.exec_()
 
     def _show_about(self):
@@ -191,6 +214,20 @@ def main():
 
     apply_theme(app)
     app.setFont(QFont("Segoe UI", 10))
+
+    # Authorization gate — runs before the splash so a denied user never sees
+    # the app chrome at all. Bootstrap mode (no admins on file) lets the first
+    # user pass through and configure access via Ctrl+Shift+A.
+    user = auth.current_user()
+    cfg = auth.load()
+    if not auth.is_authorized(user, cfg):
+        QMessageBox.critical(
+            None,
+            f"{APP_NAME} — Access Denied",
+            f"<b>{user}</b> is not authorized to use {APP_NAME}.<br><br>"
+            f"Contact your CAPEView administrator to be added to the access list.",
+        )
+        sys.exit(1)
 
     # Window/taskbar icon — looked up relative to this module so it works
     # both in dev and inside the PyInstaller bundle (where Resources/ is
