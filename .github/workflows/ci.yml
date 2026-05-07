@@ -1,9 +1,10 @@
 name: CI
 
 on:
+  # Direct pushes to main are gated locally by pre-commit (ruff + pytest), so
+  # CI no longer fires on every commit — that just burned Actions minutes for
+  # the same checks twice. PRs (when used) still get the safety net.
   pull_request:
-  push:
-    branches: [main, master]
 
 jobs:
   lint-and-test:
