@@ -129,6 +129,9 @@ class CAPEView(QMainWindow):
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage(f"{APP_NAME} {VERSION} ready", 5000)
 
+        # Dashboard surfaces drop-zone results through the status bar
+        self.dashboard.status_message.connect(self.status_bar.showMessage)
+
         self.update_manager = None
 
     # ------------------------------------------------------------------

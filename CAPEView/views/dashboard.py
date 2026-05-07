@@ -1,16 +1,20 @@
 """Dashboard tab — high-level CAPE program metrics.
 
 Lightweight summary of the entries, claims, and protest workload. Pulls live
-counts from cape.db on each refresh.
+counts from cape.db on each refresh. Also hosts the drag-and-drop zone for
+ad-hoc claim CSV ingestion.
 """
 
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt
+from pathlib import Path
+
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from CAPEView import cape_database as db
+from CAPEView import claims_csv_ingest as ingest
 from CAPEView.theme import style as button_style
 
 
@@ -41,8 +45,77 @@ class StatCard(QFrame):
         self.value_label.setText(str(value) if value is not None else "—")
 
 
+class DropZone(QFrame):
+    """Drag-and-drop target for a single Claim Status CSV file.
+
+    Emits ``file_dropped(str)`` with the local path on a valid drop, or
+    ``invalid_drop(str)`` with a user-facing reason otherwise.
+    """
+
+    file_dropped = pyqtSignal(str)
+    invalid_drop = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setMinimumHeight(72)
+        self._set_idle_style()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 14, 20, 14)
+        self.label = QLabel("Drop a Claim Status CSV here to import")
+        self.label.setAlignment(Qt.AlignCenter)
+        self.label.setStyleSheet("color: #1C323A; font-size: 13px; background: transparent; border: none;")
+        layout.addWidget(self.label)
+
+    def _set_idle_style(self):
+        self.setStyleSheet(
+            "QFrame { background: #F0F8FA; border: 2px dashed #5FA5B4; border-radius: 8px; }"
+        )
+
+    def _set_hover_style(self):
+        self.setStyleSheet(
+            "QFrame { background: #D4ECF1; border: 2px dashed #2D7B8B; border-radius: 8px; }"
+        )
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            if len(urls) == 1 and urls[0].toLocalFile().lower().endswith(".csv"):
+                self._set_hover_style()
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._set_idle_style()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):
+        self._set_idle_style()
+        urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
+        if len(urls) > 1:
+            self.invalid_drop.emit("Drop one file at a time.")
+            event.ignore()
+            return
+        if not urls:
+            event.ignore()
+            return
+        path = urls[0].toLocalFile()
+        if not path.lower().endswith(".csv"):
+            self.invalid_drop.emit("Only .csv files are accepted.")
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self.file_dropped.emit(path)
+
+
 class DashboardView(QWidget):
     """Top-level dashboard tab."""
+
+    # (message, timeout_ms) — main window connects to QStatusBar.showMessage
+    status_message = pyqtSignal(str, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -61,6 +134,21 @@ class DashboardView(QWidget):
         self.refresh_button.clicked.connect(self.refresh)
         header.addWidget(self.refresh_button)
         outer.addLayout(header)
+
+        # Drop zone + result banner sit between the title and the cards
+        self.drop_zone = DropZone()
+        self.drop_zone.file_dropped.connect(self._on_file_dropped)
+        self.drop_zone.invalid_drop.connect(self._show_warning)
+        outer.addWidget(self.drop_zone)
+
+        self._banner = QLabel()
+        self._banner.setAlignment(Qt.AlignCenter)
+        self._banner.setVisible(False)
+        outer.addWidget(self._banner)
+
+        self._banner_timer = QTimer(self)
+        self._banner_timer.setSingleShot(True)
+        self._banner_timer.timeout.connect(lambda: self._banner.setVisible(False))
 
         grid = QGridLayout()
         grid.setSpacing(12)
@@ -86,6 +174,47 @@ class DashboardView(QWidget):
         outer.addWidget(self._status)
 
         self.refresh()
+
+    # ------------------------------------------------------------------
+    # Drag-and-drop handlers
+    # ------------------------------------------------------------------
+    def _on_file_dropped(self, path: str):
+        try:
+            summary = ingest.process_single_file(Path(path))
+        except Exception as e:
+            self._show_warning(f"Ingest failed: {e}")
+            return
+        if summary["errors"]:
+            self._show_warning("Ingest errors: " + "; ".join(summary["errors"]))
+            return
+        msg = (
+            f"Imported {Path(path).name}: {summary['rows']} rows "
+            f"({summary['inserted']} new, {summary['updated']} updated)"
+        )
+        self._show_success(msg)
+        self.status_message.emit(msg, 8000)
+        self.refresh()
+
+    def _show_success(self, msg: str):
+        self._banner.setText(msg)
+        self._banner.setStyleSheet(
+            "QLabel { background: #DBF0E2; color: #1F5A2F; "
+            "border: 1px solid #7BB48A; border-radius: 6px; "
+            "padding: 8px 12px; font-size: 12px; }"
+        )
+        self._banner.setVisible(True)
+        self._banner_timer.start(8000)
+
+    def _show_warning(self, msg: str):
+        self._banner.setText(msg)
+        self._banner.setStyleSheet(
+            "QLabel { background: #FBE7CB; color: #7A4A1B; "
+            "border: 1px solid #D9A763; border-radius: 6px; "
+            "padding: 8px 12px; font-size: 12px; }"
+        )
+        self._banner.setVisible(True)
+        self._banner_timer.start(6000)
+        self.status_message.emit(msg, 6000)
 
     # ------------------------------------------------------------------
     def refresh(self):

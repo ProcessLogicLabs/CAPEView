@@ -167,6 +167,57 @@ def process_inbox(inbox: Path, processed: Path | None = None) -> dict:
     return summary
 
 
+def process_single_file(src: Path, inbox: Path | None = None) -> dict:
+    """Copy ``src`` into the inbox, ingest just that file, and archive it.
+
+    Used by the Dashboard drag-and-drop zone. Mirrors ``process_inbox`` for a
+    single file: it does *not* sweep the inbox for other waiting CSVs, which
+    keeps the drag-and-drop path race-free against the cron-driven sweep.
+
+    Returns a summary dict shaped like ``process_inbox``'s return value.
+    """
+    src = Path(src)
+    inbox = inbox or DEFAULT_INBOX
+    inbox.mkdir(parents=True, exist_ok=True)
+    processed = inbox / "processed"
+    processed.mkdir(parents=True, exist_ok=True)
+
+    # Copy into inbox; collision-resolve with a UTC timestamp suffix.
+    target = inbox / src.name
+    if target.exists():
+        stem, suffix = target.stem, target.suffix
+        ts_suffix = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        target = inbox / f"{stem}.{ts_suffix}{suffix}"
+    shutil.copy2(str(src), str(target))
+
+    summary = {"files": 0, "rows": 0, "inserted": 0, "updated": 0, "errors": []}
+
+    conn = db.connect()
+    db.init_db(conn)
+    started = db.now_iso()
+    try:
+        rows = parse_csv(target)
+        inserted, updated = db.upsert_claims(conn, rows)
+        db.record_import_run(
+            conn, "claims_csv_drop", str(target),
+            inserted, updated, started,
+            notes=f"{len(rows)} rows parsed (drag-and-drop)",
+        )
+        summary["files"] = 1
+        summary["rows"] = len(rows)
+        summary["inserted"] = inserted
+        summary["updated"] = updated
+        archive_file(target, processed)
+        logger.info("Drop-zone ingested %s: %d rows (insert=%d update=%d)",
+                    target.name, len(rows), inserted, updated)
+    except Exception as e:
+        summary["errors"].append(f"{target.name}: {e}")
+        logger.exception("Drop-zone failed to ingest %s", target.name)
+    finally:
+        conn.close()
+    return summary
+
+
 def watch(inbox: Path, interval_seconds: int = 60):
     logger.info("Watching %s every %ss (Ctrl-C to stop)", inbox, interval_seconds)
     while True:
