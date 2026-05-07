@@ -19,7 +19,6 @@ from PyQt5.QtWidgets import (
 from CAPEView import workbook_export
 from CAPEView.theme import style as button_style
 
-
 _BUTTON_LABEL = "Export CAPE ESTIMATE workbook..."
 
 

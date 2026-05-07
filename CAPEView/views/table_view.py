@@ -33,9 +33,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from CAPEView import auth
+from CAPEView import auth, export_view
 from CAPEView import cape_database as db
-from CAPEView import export_view
 from CAPEView.theme import style as button_style
 
 # ---------------------------------------------------------------------------

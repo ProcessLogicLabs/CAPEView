@@ -56,7 +56,7 @@ def write_xlsx(
         cell.alignment = header_align
 
     row_colors = row_colors or [None] * len(rows)
-    for r_idx, (row, hex_color) in enumerate(zip(rows, row_colors), start=2):
+    for r_idx, (row, hex_color) in enumerate(zip(rows, row_colors, strict=False), start=2):
         fill = None
         if hex_color:
             argb = "FF" + hex_color.lstrip("#").upper()
