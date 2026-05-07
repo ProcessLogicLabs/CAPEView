@@ -37,10 +37,6 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-; Bundled populated DB. Seeded into the user-chosen folder. onlyifdoesntexist
-; protects existing data on reinstall/upgrade; uninsneveruninstall keeps user
-; data through an uninstall.
-Source: "Resources\seed\cape.db"; DestDir: "{code:GetDbDir}"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\_internal\Resources\icon.ico"; WorkingDir: "{app}"
