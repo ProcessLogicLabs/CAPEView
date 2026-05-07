@@ -7,6 +7,7 @@ ad-hoc claim CSV ingestion.
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
@@ -15,6 +16,7 @@ from PyQt5.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButto
 
 from CAPEView import cape_database as db
 from CAPEView import claims_csv_ingest as ingest
+from CAPEView import outlook_drop
 from CAPEView.theme import style as button_style
 
 
@@ -80,12 +82,21 @@ class DropZone(QFrame):
         )
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            urls = event.mimeData().urls()
+        md = event.mimeData()
+        # 1) Standard file drops from File Explorer
+        if md.hasUrls():
+            urls = md.urls()
             if len(urls) == 1 and urls[0].toLocalFile().lower().endswith(".csv"):
                 self._set_hover_style()
                 event.acceptProposedAction()
                 return
+        # 2) Outlook attachment drag — peek the filename from the OLE
+        # FileGroupDescriptor without touching FileContents.
+        name = self._peek_outlook_filename(md)
+        if name and name.lower().endswith(".csv"):
+            self._set_hover_style()
+            event.acceptProposedAction()
+            return
         event.ignore()
 
     def dragLeaveEvent(self, event):
@@ -94,21 +105,66 @@ class DropZone(QFrame):
 
     def dropEvent(self, event):
         self._set_idle_style()
-        urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
-        if len(urls) > 1:
-            self.invalid_drop.emit("Drop one file at a time.")
+        md = event.mimeData()
+
+        # 1) Standard URL drops
+        if md.hasUrls():
+            urls = md.urls()
+            if len(urls) > 1:
+                self.invalid_drop.emit("Drop one file at a time.")
+                event.ignore()
+                return
+            if urls:
+                path = urls[0].toLocalFile()
+                if not path.lower().endswith(".csv"):
+                    self.invalid_drop.emit("Only .csv files are accepted.")
+                    event.ignore()
+                    return
+                event.acceptProposedAction()
+                self.file_dropped.emit(path)
+                return
+
+        # 2) Outlook attachment drop (OLE FileGroupDescriptor + FileContents)
+        target = self._materialize_outlook_drop(md)
+        if target is None:
+            self.invalid_drop.emit("Drag did not include a recognizable file.")
             event.ignore()
             return
-        if not urls:
-            event.ignore()
-            return
-        path = urls[0].toLocalFile()
-        if not path.lower().endswith(".csv"):
+        if target.suffix.lower() != ".csv":
             self.invalid_drop.emit("Only .csv files are accepted.")
             event.ignore()
             return
         event.acceptProposedAction()
-        self.file_dropped.emit(path)
+        self.file_dropped.emit(str(target))
+
+    # ------------------------------------------------------------------
+    # Outlook OLE helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _peek_outlook_filename(md) -> str | None:
+        fgd_w = bytes(md.data(outlook_drop.FGD_W_FORMAT)) if md.hasFormat(outlook_drop.FGD_W_FORMAT) else None
+        fgd_a = bytes(md.data(outlook_drop.FGD_A_FORMAT)) if md.hasFormat(outlook_drop.FGD_A_FORMAT) else None
+        if not fgd_w and not fgd_a:
+            return None
+        return outlook_drop.peek_filename(fgd_w, fgd_a)
+
+    @staticmethod
+    def _materialize_outlook_drop(md) -> Path | None:
+        fgd_w = bytes(md.data(outlook_drop.FGD_W_FORMAT)) if md.hasFormat(outlook_drop.FGD_W_FORMAT) else None
+        fgd_a = bytes(md.data(outlook_drop.FGD_A_FORMAT)) if md.hasFormat(outlook_drop.FGD_A_FORMAT) else None
+        if not md.hasFormat(outlook_drop.FC_FORMAT):
+            return None
+        contents = bytes(md.data(outlook_drop.FC_FORMAT))
+        parsed = outlook_drop.parse_attachment(fgd_w, fgd_a, contents)
+        if not parsed:
+            return None
+        filename, payload = parsed
+        # Sanitize: strip path separators that some senders embed in cFileName
+        safe_name = filename.replace("/", "_").replace("\\", "_") or "attachment.bin"
+        tmpdir = Path(tempfile.mkdtemp(prefix="capeview_drop_"))
+        target = tmpdir / safe_name
+        target.write_bytes(payload)
+        return target
 
 
 class DashboardView(QWidget):
