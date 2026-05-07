@@ -219,7 +219,7 @@ class DashboardView(QWidget):
             "liq_due_30":           StatCard("LIQ DEADLINE ≤ 30 DAYS"),
             "rejected_open":        StatCard("REJECTED ENTRIES OPEN"),
             "corrections_7d":       StatCard("CORRECTIONS (7D)"),
-            "regressions_7d":       StatCard("REGRESSIONS (7D)"),
+            "regressions_7d":       StatCard("NEW REJECTS (7D)"),
         }
         items = list(self.cards.values())
         for i, card in enumerate(items):
