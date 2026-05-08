@@ -332,6 +332,83 @@ def test_ingest_calls_digest_when_rows_changed(tmp_path, monkeypatch):
     assert captured["rows_at_call"] == 1
 
 
+def test_ingest_skips_digest_when_no_compliance_change(tmp_path, monkeypatch):
+    """Re-ingesting a CSV with the same Failed-status row → no digest.
+
+    This is the spam-prevention guard: upsert_claims counts every existing
+    row as 'updated' even when only last_seen got bumped, so the previous
+    rule of 'fire when inserted+updated > 0' caused 12 emails for 12
+    drops of the same file. The new rule fires only when audit_log shows
+    a status transition or a new Failed claim arrived this cycle.
+    """
+    from CAPEView import claims_csv_ingest
+
+    db_path = tmp_path / "cape.db"
+    monkeypatch.setenv("CAPEVIEW_DB_PATH", str(db_path))
+
+    captured = {"calls": 0}
+
+    def fake_send(*args, **kwargs):
+        captured["calls"] += 1
+        return {"sent": False, "recipients": [], "rows": 0, "error": None}
+
+    monkeypatch.setattr(email_digest, "send_compliance_digest", fake_send)
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    csv_content = (
+        "ENTRY_NUMBER,CLAIM_NUMBER,STATUS,ERROR_DESCRIPTION\n"
+        "60500009000,X1,Failed,UNABLE TO CALCULATE DUTY\n"
+    )
+
+    # First ingest: brand-new Failed claim → digest fires
+    (inbox / "first.csv").write_text(csv_content, encoding="utf-8")
+    claims_csv_ingest.process_inbox(inbox)
+    assert captured["calls"] == 1
+
+    # Second ingest: same content, no real changes → digest does NOT fire
+    (inbox / "second.csv").write_text(csv_content, encoding="utf-8")
+    claims_csv_ingest.process_inbox(inbox)
+    assert captured["calls"] == 1, "digest should not fire when nothing changed"
+
+
+def test_ingest_calls_digest_on_status_transition(tmp_path, monkeypatch):
+    """Status flip Failed → Updated produces an audit_log entry → digest fires."""
+    from CAPEView import claims_csv_ingest
+
+    db_path = tmp_path / "cape.db"
+    monkeypatch.setenv("CAPEVIEW_DB_PATH", str(db_path))
+
+    captured = {"calls": 0}
+
+    def fake_send(*args, **kwargs):
+        captured["calls"] += 1
+        return {"sent": False, "recipients": [], "rows": 0, "error": None}
+
+    monkeypatch.setattr(email_digest, "send_compliance_digest", fake_send)
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+
+    # Day 1: claim is Failed
+    (inbox / "day1.csv").write_text(
+        "ENTRY_NUMBER,CLAIM_NUMBER,STATUS,ERROR_DESCRIPTION\n"
+        "60500009000,X1,Failed,UNABLE TO CALCULATE DUTY\n",
+        encoding="utf-8",
+    )
+    claims_csv_ingest.process_inbox(inbox)
+    assert captured["calls"] == 1
+
+    # Day 2: claim flips to Entry Summary Updated → digest fires (transition out of Failed)
+    (inbox / "day2.csv").write_text(
+        "ENTRY_NUMBER,CLAIM_NUMBER,STATUS,ERROR_DESCRIPTION\n"
+        "60500009000,X1,Entry Summary Updated,\n",
+        encoding="utf-8",
+    )
+    claims_csv_ingest.process_inbox(inbox)
+    assert captured["calls"] == 2
+
+
 def test_ingest_skips_digest_when_no_rows(tmp_path, monkeypatch):
     """An empty inbox produces a summary with 0 rows; digest should NOT fire."""
     from CAPEView import claims_csv_ingest

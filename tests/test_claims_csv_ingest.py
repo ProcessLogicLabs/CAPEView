@@ -173,7 +173,14 @@ def test_status_change_writes_audit_log(tmp_path, isolated_db):
 
 
 def test_no_audit_log_on_unchanged_row(tmp_path, isolated_db):
-    """Re-ingesting an identical row produces no audit_log entries."""
+    """Re-ingesting an identical row adds no NEW audit_log entries.
+
+    Note: a brand-new Failed claim writes one audit_log row at insert time
+    (NULL -> Failed transition) so the email digest hook can detect newly
+    arrived rejects. The test intent is "subsequent re-ingests don't keep
+    adding entries" — so the count after both ingests should equal the
+    count after just the first ingest.
+    """
     inbox = tmp_path / "inbox"
     inbox.mkdir()
 
@@ -185,17 +192,26 @@ def test_no_audit_log_on_unchanged_row(tmp_path, isolated_db):
     write_csv(csv1, payload)
     claims_csv_ingest.process_inbox(inbox)
 
+    conn = db.connect()
+    db.init_db(conn)
+    after_first = conn.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE row_key = '60500002100|X2'"
+    ).fetchone()[0]
+    conn.close()
+    assert after_first == 1  # the NULL -> Failed insert audit
+
     csv2 = inbox / "second.csv"
     write_csv(csv2, payload)
     claims_csv_ingest.process_inbox(inbox)
 
     conn = db.connect()
     db.init_db(conn)
-    cnt = conn.execute(
+    after_second = conn.execute(
         "SELECT COUNT(*) FROM audit_log WHERE row_key = '60500002100|X2'"
     ).fetchone()[0]
     conn.close()
-    assert cnt == 0
+    # No NEW entries written by the no-op re-ingest
+    assert after_second == after_first
 
 
 def test_manual_override_blocks_csv_audit(tmp_path, isolated_db):
@@ -220,6 +236,14 @@ def test_manual_override_blocks_csv_audit(tmp_path, isolated_db):
     )
     conn.close()
 
+    # Capture audit count after the seed insert (NULL -> Failed = 1 entry)
+    conn = db.connect()
+    db.init_db(conn)
+    after_seed = conn.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE row_key = '60500002200|X3'"
+    ).fetchone()[0]
+    conn.close()
+
     # Now the upstream CSV would correct it — should be ignored
     csv2 = inbox / "would_correct.csv"
     write_csv(csv2, [
@@ -230,7 +254,7 @@ def test_manual_override_blocks_csv_audit(tmp_path, isolated_db):
 
     conn = db.connect()
     db.init_db(conn)
-    cnt = conn.execute(
+    after_would_correct = conn.execute(
         "SELECT COUNT(*) FROM audit_log WHERE row_key = '60500002200|X3'"
     ).fetchone()[0]
     # Status preserved at Failed
@@ -239,7 +263,8 @@ def test_manual_override_blocks_csv_audit(tmp_path, isolated_db):
         "WHERE entry_summary_number = '60500002200' AND claim_number = 'X3'"
     ).fetchone()[0]
     conn.close()
-    assert cnt == 0
+    # The manual-override path skipped the update entirely → no NEW audit row
+    assert after_would_correct == after_seed
     assert status == "Failed"
 
 
