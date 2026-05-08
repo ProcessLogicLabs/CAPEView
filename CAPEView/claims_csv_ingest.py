@@ -253,12 +253,13 @@ def _maybe_send_digest(summary: dict) -> None:
         conn = db.connect()
         try:
             db.init_db(conn)
-            result = email_digest.send_compliance_digest_to_self(conn, get_version())
+            result = email_digest.send_compliance_digest(conn, get_version())
         finally:
             conn.close()
         if result.get("sent"):
             logger.info("Compliance digest sent to %s (%d rows)",
-                        result.get("recipient"), result.get("rows", 0))
+                        ", ".join(result.get("recipients", [])),
+                        result.get("rows", 0))
         elif result.get("error"):
             logger.warning("Compliance digest skipped: %s", result["error"])
     except Exception:

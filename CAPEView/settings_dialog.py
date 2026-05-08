@@ -25,14 +25,18 @@ import sqlite3
 from pathlib import Path
 
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMessageBox,
     QPushButton,
     QVBoxLayout,
@@ -57,6 +61,7 @@ class SettingsDialog(QDialog):
 
         outer.addWidget(self._build_database_group())
         outer.addWidget(self._build_seed_group())
+        outer.addWidget(self._build_email_group())
 
         # OK / Cancel
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -99,6 +104,79 @@ class SettingsDialog(QDialog):
         helper.setStyleSheet("color: #5A7079; font-size: 11px;")
         form.addRow("", helper)
         return group
+
+    def _build_email_group(self) -> QGroupBox:
+        group = QGroupBox("Compliance digest email")
+        form = QFormLayout(group)
+
+        self.email_enabled_check = QCheckBox(
+            "Send a Compliance digest after each successful CSV ingest"
+        )
+        self.email_enabled_check.setChecked(
+            bool(self.settings.get("email.enabled", False))
+        )
+        form.addRow("", self.email_enabled_check)
+
+        # Recipients list editor
+        recipients_row = QHBoxLayout()
+        self.recipients_list = QListWidget()
+        self.recipients_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.recipients_list.setMinimumHeight(80)
+        for addr in (self.settings.get("email.recipients", []) or []):
+            self.recipients_list.addItem(str(addr))
+        recipients_row.addWidget(self.recipients_list, 1)
+
+        rec_btns = QVBoxLayout()
+        add_btn = QPushButton("Add...")
+        add_btn.clicked.connect(self._on_add_recipient)
+        remove_btn = QPushButton("Remove")
+        remove_btn.clicked.connect(self._on_remove_recipient)
+        rec_btns.addWidget(add_btn)
+        rec_btns.addWidget(remove_btn)
+        rec_btns.addStretch()
+        recipients_row.addLayout(rec_btns)
+        form.addRow("Recipients:", recipients_row)
+
+        helper = QLabel(
+            "Leave the list empty to send the digest to yourself only "
+            "(your Outlook account is used as both sender and recipient). "
+            "Add addresses here to broadcast the digest to a team."
+        )
+        helper.setWordWrap(True)
+        helper.setStyleSheet("color: #5A7079; font-size: 11px;")
+        form.addRow("", helper)
+        return group
+
+    def _on_add_recipient(self):
+        addr, ok = QInputDialog.getText(
+            self, "Add recipient",
+            "Email address (e.g. eric@example.com):",
+        )
+        if not ok:
+            return
+        addr = addr.strip()
+        if "@" not in addr or "." not in addr:
+            QMessageBox.warning(
+                self, "Invalid address",
+                f"{addr!r} doesn't look like an email address.",
+            )
+            return
+        # Reject duplicates (case-insensitive)
+        existing = {self.recipients_list.item(i).text().lower()
+                    for i in range(self.recipients_list.count())}
+        if addr.lower() in existing:
+            QMessageBox.information(
+                self, "Already added",
+                f"{addr} is already on the recipients list.",
+            )
+            return
+        self.recipients_list.addItem(addr)
+
+    def _on_remove_recipient(self):
+        row = self.recipients_list.currentRow()
+        if row < 0:
+            return
+        self.recipients_list.takeItem(row)
 
     def _build_seed_group(self) -> QGroupBox:
         group = QGroupBox("Initialize from another database (one-time seed)")
@@ -226,6 +304,15 @@ class SettingsDialog(QDialog):
     def _on_save(self):
         path_text = self.path_edit.text().strip()
         self.settings.set("database.path", path_text or None)
+
+        self.settings.set("email.enabled", self.email_enabled_check.isChecked())
+        recipients = [
+            self.recipients_list.item(i).text()
+            for i in range(self.recipients_list.count())
+        ]
+        # Store as None if empty so the key is removed from settings.json
+        self.settings.set("email.recipients", recipients or None)
+
         try:
             self.settings.save()
         except Exception as e:
@@ -234,7 +321,9 @@ class SettingsDialog(QDialog):
             return
         QMessageBox.information(
             self, "Settings saved",
-            "Database path updated.\n\nRestart CAPEView for the change to take effect.",
+            "Settings updated.\n\nRestart CAPEView for any database-path "
+            "change to take effect. Email digest changes apply on the next "
+            "CSV ingest.",
         )
         self.accept()
 

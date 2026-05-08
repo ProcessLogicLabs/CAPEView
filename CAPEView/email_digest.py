@@ -1,22 +1,25 @@
 """Compliance digest email — runs after a successful CSV ingest.
 
 When email is enabled in settings, every successful CSV ingest sends a
-summary of the current Compliance view to the running user via Outlook
-COM. The user sees the digest in their inbox + Sent folder and can
-forward it to share with the team.
+summary of the current Compliance view to a configurable list of
+recipients via Outlook COM. If the recipients list is empty the digest
+falls back to the running user (so the user gets it in their own inbox
++ Sent folder by default).
 
 Outlook COM (``win32com.client``) handles transport — no SMTP relay, no
 password storage, no IT involvement. Tradeoff: Outlook must be installed
 on the user's machine. CAPEView is Windows-desktop-only already, so this
 is acceptable.
 
-Settings keys (added to settings.json by the admin):
+Settings keys (managed via the in-app Settings dialog):
 
-    {"email.enabled": true}
+    {
+      "email.enabled": true,
+      "email.recipients": ["eric@example.com", "team@example.com"]
+    }
 
-That's it. Recipient is always the running user, derived from Outlook's
-``CurrentUser.AddressEntry``. Default ``email.enabled = False`` so email
-is opt-in (no surprise sends).
+Default ``email.enabled = False`` so email is opt-in (no surprise sends).
+Default ``email.recipients = []`` falls back to the running user.
 
 The Compliance SQL is duplicated from ``views/table_view.ComplianceView.
 build_query`` so this module stays Qt-free. Tests guard against drift.
@@ -296,12 +299,23 @@ def _send_via_outlook(
     mail.Send()
 
 
-def send_compliance_digest_to_self(
+def _resolve_recipients(settings) -> list[str]:
+    """Return the configured recipient list, falling back to the running user
+    when the list is empty. Returns ``[]`` if neither is available."""
+    raw = settings.get("email.recipients", []) or []
+    cleaned = [str(addr).strip() for addr in raw if str(addr).strip()]
+    if cleaned:
+        return cleaned
+    self_addr = _get_current_user_email()
+    return [self_addr] if self_addr else []
+
+
+def send_compliance_digest(
     conn: sqlite3.Connection, version: str, settings=None,
 ) -> dict:
     """Build and send the Compliance digest. No-op if email.enabled is false.
 
-    Returns ``{"sent": bool, "recipient": str|None, "rows": int, "error": str|None}``.
+    Returns ``{"sent": bool, "recipients": list[str], "rows": int, "error": str|None}``.
     Never raises — failures are caught and reported via the return dict.
     """
     if settings is None:
@@ -309,20 +323,20 @@ def send_compliance_digest_to_self(
         settings = SettingsManager()
 
     if not settings.get("email.enabled", False):
-        return {"sent": False, "recipient": None, "rows": 0, "error": None}
+        return {"sent": False, "recipients": [], "rows": 0, "error": None}
 
     try:
         digest = build_digest(conn)
     except Exception as e:
         logger.exception("Failed to build compliance digest")
-        return {"sent": False, "recipient": None, "rows": 0,
+        return {"sent": False, "recipients": [], "rows": 0,
                 "error": f"build_digest: {e}"}
 
-    recipient = _get_current_user_email()
-    if not recipient:
-        msg = "no recipient (Outlook unreachable or user has no SMTP address)"
+    recipients = _resolve_recipients(settings)
+    if not recipients:
+        msg = "no recipients (configured list is empty and Outlook user lookup failed)"
         logger.warning("Skipping compliance digest: %s", msg)
-        return {"sent": False, "recipient": None,
+        return {"sent": False, "recipients": [],
                 "rows": digest["summary"]["total_failed"], "error": msg}
 
     summary = digest["summary"]
@@ -342,17 +356,19 @@ def send_compliance_digest_to_self(
         write_attachment(digest, attachment)
     except Exception as e:
         logger.exception("Failed to write compliance digest attachment")
-        return {"sent": False, "recipient": recipient,
+        return {"sent": False, "recipients": recipients,
                 "rows": summary["total_failed"], "error": f"write_attachment: {e}"}
 
+    # Outlook accepts a semicolon-delimited string in MailItem.To
+    to_address = "; ".join(recipients)
     try:
-        _send_via_outlook(subject, html_body, attachment, recipient)
+        _send_via_outlook(subject, html_body, attachment, to_address)
     except Exception as e:
         logger.exception("Failed to send compliance digest via Outlook")
-        return {"sent": False, "recipient": recipient,
+        return {"sent": False, "recipients": recipients,
                 "rows": summary["total_failed"], "error": f"send: {e}"}
 
     logger.info("Compliance digest sent to %s (%d rows)",
-                recipient, summary["total_failed"])
-    return {"sent": True, "recipient": recipient,
+                ", ".join(recipients), summary["total_failed"])
+    return {"sent": True, "recipients": recipients,
             "rows": summary["total_failed"], "error": None}

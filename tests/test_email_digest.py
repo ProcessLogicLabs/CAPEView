@@ -159,32 +159,69 @@ def test_write_attachment_produces_readable_xlsx(seeded_db, tmp_path):
 
 def _make_disabled_settings():
     s = MagicMock()
+    # Any key returns the second arg (the default) — disabled, empty list
+    s.get.side_effect = lambda key, default=None: default
     s.get.return_value = False
     return s
 
 
-def _make_enabled_settings():
+def _make_settings(*, enabled=True, recipients=None):
+    """Build a mock SettingsManager that returns ``enabled`` for
+    ``email.enabled`` and ``recipients`` for ``email.recipients``."""
     s = MagicMock()
-    s.get.return_value = True
+
+    def fake_get(key, default=None):
+        if key == "email.enabled":
+            return enabled
+        if key == "email.recipients":
+            return recipients if recipients is not None else []
+        return default
+
+    s.get.side_effect = fake_get
     return s
 
 
 def test_send_is_noop_when_disabled(seeded_db):
-    result = email_digest.send_compliance_digest_to_self(
-        seeded_db, "v0.0.1", settings=_make_disabled_settings(),
+    result = email_digest.send_compliance_digest(
+        seeded_db, "v0.0.1", settings=_make_settings(enabled=False),
     )
-    assert result == {"sent": False, "recipient": None, "rows": 0, "error": None}
+    assert result == {"sent": False, "recipients": [], "rows": 0, "error": None}
 
 
-def test_send_returns_error_when_no_recipient(seeded_db):
-    """email.enabled=True but Outlook unreachable → graceful fail, no exception."""
+def test_send_returns_error_when_no_recipients(seeded_db):
+    """email.enabled=True, recipients empty, Outlook unreachable → graceful fail."""
     with patch.object(email_digest, "_get_current_user_email", return_value=""):
-        result = email_digest.send_compliance_digest_to_self(
-            seeded_db, "v0.0.1", settings=_make_enabled_settings(),
+        result = email_digest.send_compliance_digest(
+            seeded_db, "v0.0.1", settings=_make_settings(recipients=[]),
         )
     assert result["sent"] is False
-    assert result["recipient"] is None
-    assert "no recipient" in (result["error"] or "")
+    assert result["recipients"] == []
+    assert "no recipients" in (result["error"] or "")
+
+
+def test_resolve_recipients_uses_configured_list():
+    """A non-empty recipients list wins over the self-fallback."""
+    settings = _make_settings(recipients=["a@x.com", "b@x.com"])
+    with patch.object(email_digest, "_get_current_user_email",
+                      return_value="should-not-be-called@example.com"):
+        addrs = email_digest._resolve_recipients(settings)
+    assert addrs == ["a@x.com", "b@x.com"]
+
+
+def test_resolve_recipients_falls_back_to_self_when_empty():
+    settings = _make_settings(recipients=[])
+    with patch.object(email_digest, "_get_current_user_email",
+                      return_value="me@example.com"):
+        addrs = email_digest._resolve_recipients(settings)
+    assert addrs == ["me@example.com"]
+
+
+def test_resolve_recipients_strips_blank_entries():
+    settings = _make_settings(recipients=["a@x.com", "", "  ", "b@x.com"])
+    with patch.object(email_digest, "_get_current_user_email",
+                      return_value="ignored@example.com"):
+        addrs = email_digest._resolve_recipients(settings)
+    assert addrs == ["a@x.com", "b@x.com"]
 
 
 def test_send_via_outlook_invokes_correct_calls(seeded_db, tmp_path):
@@ -216,17 +253,17 @@ def test_send_via_outlook_invokes_correct_calls(seeded_db, tmp_path):
     fake_mail.Send.assert_called_once()
 
 
-def test_send_compliance_digest_end_to_end_mocked(seeded_db, tmp_path):
-    """Full pipeline with Outlook mocked: builds, renders, writes xlsx, calls send."""
+def test_send_compliance_digest_end_to_end_self(seeded_db, tmp_path):
+    """Empty recipients list + valid Outlook self → digest sends to self."""
     with patch.object(email_digest, "_get_current_user_email",
                       return_value="heath@example.com"), \
          patch.object(email_digest, "_send_via_outlook") as mock_send:
-        result = email_digest.send_compliance_digest_to_self(
-            seeded_db, "v0.0.1", settings=_make_enabled_settings(),
+        result = email_digest.send_compliance_digest(
+            seeded_db, "v0.0.1", settings=_make_settings(recipients=[]),
         )
 
     assert result["sent"] is True
-    assert result["recipient"] == "heath@example.com"
+    assert result["recipients"] == ["heath@example.com"]
     assert result["rows"] == 2
     assert result["error"] is None
     mock_send.assert_called_once()
@@ -236,6 +273,23 @@ def test_send_compliance_digest_end_to_end_mocked(seeded_db, tmp_path):
     assert "2 failed claims" in subject
     assert to_address == "heath@example.com"
     assert attachment_path.exists()
+
+
+def test_send_compliance_digest_end_to_end_multi_recipient(seeded_db, tmp_path):
+    """Configured recipients are joined into a semicolon-delimited Outlook To."""
+    with patch.object(email_digest, "_get_current_user_email",
+                      return_value="should-not-be-used@example.com"), \
+         patch.object(email_digest, "_send_via_outlook") as mock_send:
+        result = email_digest.send_compliance_digest(
+            seeded_db, "v0.0.1",
+            settings=_make_settings(recipients=["eric@example.com", "team@example.com"]),
+        )
+
+    assert result["sent"] is True
+    assert result["recipients"] == ["eric@example.com", "team@example.com"]
+    args, _ = mock_send.call_args
+    _subject, _html_body, _attachment, to_address = args
+    assert to_address == "eric@example.com; team@example.com"
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +314,7 @@ def test_ingest_calls_digest_when_rows_changed(tmp_path, monkeypatch):
         ).fetchone()[0]
         return {"sent": False, "recipient": None, "rows": 0, "error": None}
 
-    monkeypatch.setattr(email_digest, "send_compliance_digest_to_self", fake_send)
+    monkeypatch.setattr(email_digest, "send_compliance_digest", fake_send)
 
     # Drop a CSV in
     inbox = tmp_path / "inbox"
@@ -291,7 +345,7 @@ def test_ingest_skips_digest_when_no_rows(tmp_path, monkeypatch):
         captured["called"] = True
         return {"sent": False, "recipient": None, "rows": 0, "error": None}
 
-    monkeypatch.setattr(email_digest, "send_compliance_digest_to_self", fake_send)
+    monkeypatch.setattr(email_digest, "send_compliance_digest", fake_send)
 
     inbox = tmp_path / "inbox"
     inbox.mkdir()
