@@ -230,9 +230,14 @@ class CAPEView(QMainWindow):
 # ==============================================================================
 
 def main():
+    # Qt requires AA_EnableHighDpiScaling to be set on the QApplication class
+    # BEFORE the QApplication instance is created — calling it on the
+    # instance prints a warning and has no effect. AA_UseHighDpiPixmaps has
+    # the same convention; set both before instantiation for consistency.
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+
     app = QApplication(sys.argv)
-    app.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-    app.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
     apply_theme(app)
     app.setFont(QFont("Segoe UI", 10))
