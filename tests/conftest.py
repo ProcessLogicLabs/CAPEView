@@ -37,4 +37,5 @@ def _no_outlook_in_tests(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("CAPEVIEW_SETTINGS_PATH", str(settings_file))
 
     from CAPEView import email_digest
-    monkeypatch.setattr(email_digest, "_win32com_client", None, raising=False)
+    monkeypatch.setattr(email_digest, "_resolve_win32com_client",
+                        lambda: None, raising=False)

@@ -225,7 +225,7 @@ def test_resolve_recipients_strips_blank_entries():
 
 
 def test_send_via_outlook_invokes_correct_calls(seeded_db, tmp_path):
-    """Mock the module-level win32com reference and verify the call sequence."""
+    """Mock _resolve_win32com_client and verify the call sequence."""
     fake_dispatch = MagicMock()
     fake_outlook = MagicMock()
     fake_mail = MagicMock()
@@ -239,8 +239,10 @@ def test_send_via_outlook_invokes_correct_calls(seeded_db, tmp_path):
     attachment = tmp_path / "att.xlsx"
     attachment.write_bytes(b"fake xlsx")
 
-    # Patch the module-level reference directly — no sys.modules munging.
-    with patch.object(email_digest, "_win32com_client", fake_module):
+    # Patch the lazy resolver — never touches sys.modules, never imports
+    # the real pywin32 even if it's installed on the test machine.
+    with patch.object(email_digest, "_resolve_win32com_client",
+                      lambda: fake_module):
         email_digest._send_via_outlook(
             "Test Subject", "<p>body</p>", attachment, "user@example.com",
         )
@@ -258,7 +260,8 @@ def test_send_via_outlook_raises_when_pywin32_missing(tmp_path):
     succeeding (the caller in send_compliance_digest catches and reports)."""
     attachment = tmp_path / "att.xlsx"
     attachment.write_bytes(b"x")
-    with patch.object(email_digest, "_win32com_client", None):
+    with patch.object(email_digest, "_resolve_win32com_client",
+                      lambda: None):
         with pytest.raises(RuntimeError, match="pywin32 not installed"):
             email_digest._send_via_outlook(
                 "S", "<p></p>", attachment, "u@example.com",

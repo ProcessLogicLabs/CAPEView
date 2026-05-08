@@ -245,25 +245,39 @@ def write_attachment(digest: dict, path: Path) -> Path:
 # pywin32 (helpful for tests on stub environments).
 # ----------------------------------------------------------------------
 
-# Module-level optional import. Tests patch this attribute directly via
-# patch.object(email_digest, "_win32com_client", mock) so they never have to
-# munge sys.modules — that pattern was leaking real Outlook calls when
-# pre-commit pytest ran on a Windows machine with pywin32 installed.
-try:
-    import win32com.client as _win32com_client  # type: ignore
-except ImportError:
-    _win32com_client = None  # type: ignore[assignment]
+def _resolve_win32com_client():
+    """Lazy resolver for the win32com.client module.
+
+    Imports on demand rather than at module load time. PyInstaller bundles
+    pywin32 with hooks that run during app startup, but module imports may
+    begin before those hooks complete — a module-level
+    ``import win32com.client`` then fails silently and the module-level
+    reference stays None for the whole process lifetime, breaking email
+    sends in v0.0.13. Calling the import lazily (here, every send) avoids
+    the race; Python's sys.modules cache makes the second-and-later
+    invocations fast.
+
+    Tests monkeypatch this resolver via
+    ``monkeypatch.setattr(email_digest, "_resolve_win32com_client", lambda: ...)``
+    so they never have to touch sys.modules.
+    """
+    try:
+        import win32com.client as wcc  # type: ignore
+        return wcc
+    except ImportError:
+        return None
 
 
 def _get_current_user_email() -> str:
     """Return the running user's primary SMTP address via Outlook COM.
     Returns an empty string if Outlook can't be reached."""
-    if _win32com_client is None:
+    wcc = _resolve_win32com_client()
+    if wcc is None:
         logger.warning("pywin32 not installed; cannot derive Outlook user email")
         return ""
 
     try:
-        outlook = _win32com_client.Dispatch("Outlook.Application")
+        outlook = wcc.Dispatch("Outlook.Application")
         ns = outlook.GetNamespace("MAPI")
         current = ns.CurrentUser
     except Exception as e:
@@ -296,10 +310,11 @@ def _send_via_outlook(
 ) -> None:
     """Send a single email via Outlook COM. Raises on failure — caller is
     responsible for catching and logging."""
-    if _win32com_client is None:
+    wcc = _resolve_win32com_client()
+    if wcc is None:
         raise RuntimeError("pywin32 not installed; cannot send via Outlook")
 
-    outlook = _win32com_client.Dispatch("Outlook.Application")
+    outlook = wcc.Dispatch("Outlook.Application")
     mail = outlook.CreateItem(0)  # 0 = olMailItem
     mail.Subject = subject
     mail.HTMLBody = html_body
