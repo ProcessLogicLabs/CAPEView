@@ -225,7 +225,7 @@ def test_resolve_recipients_strips_blank_entries():
 
 
 def test_send_via_outlook_invokes_correct_calls(seeded_db, tmp_path):
-    """Mock win32com.client.Dispatch and verify the call sequence."""
+    """Mock the module-level win32com reference and verify the call sequence."""
     fake_dispatch = MagicMock()
     fake_outlook = MagicMock()
     fake_mail = MagicMock()
@@ -233,14 +233,14 @@ def test_send_via_outlook_invokes_correct_calls(seeded_db, tmp_path):
     fake_outlook.CreateItem.return_value = fake_mail
 
     fake_module = MagicMock()
-    fake_module.client.Dispatch = fake_dispatch
+    fake_module.Dispatch = fake_dispatch
 
     # Pre-create attachment so the path exists when Outlook would attach it
     attachment = tmp_path / "att.xlsx"
     attachment.write_bytes(b"fake xlsx")
 
-    with patch.dict("sys.modules", {"win32com": fake_module,
-                                     "win32com.client": fake_module.client}):
+    # Patch the module-level reference directly — no sys.modules munging.
+    with patch.object(email_digest, "_win32com_client", fake_module):
         email_digest._send_via_outlook(
             "Test Subject", "<p>body</p>", attachment, "user@example.com",
         )
@@ -251,6 +251,18 @@ def test_send_via_outlook_invokes_correct_calls(seeded_db, tmp_path):
     assert fake_mail.To == "user@example.com"
     fake_mail.Attachments.Add.assert_called_once_with(str(attachment))
     fake_mail.Send.assert_called_once()
+
+
+def test_send_via_outlook_raises_when_pywin32_missing(tmp_path):
+    """If pywin32 isn't available the function raises rather than silently
+    succeeding (the caller in send_compliance_digest catches and reports)."""
+    attachment = tmp_path / "att.xlsx"
+    attachment.write_bytes(b"x")
+    with patch.object(email_digest, "_win32com_client", None):
+        with pytest.raises(RuntimeError, match="pywin32 not installed"):
+            email_digest._send_via_outlook(
+                "S", "<p></p>", attachment, "u@example.com",
+            )
 
 
 def test_send_compliance_digest_end_to_end_self(seeded_db, tmp_path):

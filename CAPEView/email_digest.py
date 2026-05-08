@@ -245,17 +245,25 @@ def write_attachment(digest: dict, path: Path) -> Path:
 # pywin32 (helpful for tests on stub environments).
 # ----------------------------------------------------------------------
 
+# Module-level optional import. Tests patch this attribute directly via
+# patch.object(email_digest, "_win32com_client", mock) so they never have to
+# munge sys.modules — that pattern was leaking real Outlook calls when
+# pre-commit pytest ran on a Windows machine with pywin32 installed.
+try:
+    import win32com.client as _win32com_client  # type: ignore
+except ImportError:
+    _win32com_client = None  # type: ignore[assignment]
+
+
 def _get_current_user_email() -> str:
     """Return the running user's primary SMTP address via Outlook COM.
     Returns an empty string if Outlook can't be reached."""
-    try:
-        import win32com.client  # type: ignore
-    except ImportError:
+    if _win32com_client is None:
         logger.warning("pywin32 not installed; cannot derive Outlook user email")
         return ""
 
     try:
-        outlook = win32com.client.Dispatch("Outlook.Application")
+        outlook = _win32com_client.Dispatch("Outlook.Application")
         ns = outlook.GetNamespace("MAPI")
         current = ns.CurrentUser
     except Exception as e:
@@ -288,9 +296,10 @@ def _send_via_outlook(
 ) -> None:
     """Send a single email via Outlook COM. Raises on failure — caller is
     responsible for catching and logging."""
-    import win32com.client  # type: ignore  # imported lazily
+    if _win32com_client is None:
+        raise RuntimeError("pywin32 not installed; cannot send via Outlook")
 
-    outlook = win32com.client.Dispatch("Outlook.Application")
+    outlook = _win32com_client.Dispatch("Outlook.Application")
     mail = outlook.CreateItem(0)  # 0 = olMailItem
     mail.Subject = subject
     mail.HTMLBody = html_body
