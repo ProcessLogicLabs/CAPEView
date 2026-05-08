@@ -180,6 +180,7 @@ def process_inbox(inbox: Path, processed: Path | None = None) -> dict:
             logger.exception("Failed to ingest %s", f.name)
 
     conn.close()
+    _maybe_send_digest(summary)
     return summary
 
 
@@ -231,7 +232,38 @@ def process_single_file(src: Path, inbox: Path | None = None) -> dict:
         logger.exception("Drop-zone failed to ingest %s", target.name)
     finally:
         conn.close()
+    _maybe_send_digest(summary)
     return summary
+
+
+def _maybe_send_digest(summary: dict) -> None:
+    """Send the Compliance digest after a successful ingest if email is enabled.
+
+    Fires only when at least one row was inserted/updated. Never raises —
+    a digest-send failure must not fail the ingest. Opens its own DB
+    connection (the ingest connection is already closed by the time this is
+    called) and reads ``email.enabled`` from settings.json via
+    ``email_digest.send_compliance_digest_to_self``.
+    """
+    if (summary.get("inserted", 0) + summary.get("updated", 0)) == 0:
+        return
+    try:
+        from CAPEView import email_digest
+        from CAPEView.version import get_version
+        conn = db.connect()
+        try:
+            db.init_db(conn)
+            result = email_digest.send_compliance_digest(conn, get_version())
+        finally:
+            conn.close()
+        if result.get("sent"):
+            logger.info("Compliance digest sent to %s (%d rows)",
+                        ", ".join(result.get("recipients", [])),
+                        result.get("rows", 0))
+        elif result.get("error"):
+            logger.warning("Compliance digest skipped: %s", result["error"])
+    except Exception:
+        logger.exception("Compliance digest hook crashed; ingest result unaffected")
 
 
 def watch(inbox: Path, interval_seconds: int = 60):
