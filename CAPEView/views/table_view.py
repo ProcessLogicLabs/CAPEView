@@ -27,14 +27,15 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from CAPEView import auth, export_view
 from CAPEView import cape_database as db
-from CAPEView import export_view
 from CAPEView.theme import style as button_style
 
 # ---------------------------------------------------------------------------
@@ -249,6 +250,10 @@ class SQLTableView(QWidget):
     currency_columns: list[int] = []
     # Column indices that hold 0/1 INTEGER flags to render as Y / N.
     flag_columns: list[int] = []
+    # Subset of flag_columns that should be user-editable (Y / N / blank
+    # dropdown). Subclasses opting in must also install a delegate and
+    # enable edit triggers — see ImportersView for the pattern.
+    editable_flag_columns: list[int] = []
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -454,6 +459,8 @@ class SQLTableView(QWidget):
                     elif c in self.flag_columns:
                         item = SortableItem(format_flag(val), sort_key=_to_int_or_none(val))
                         item.setTextAlignment(Qt.AlignCenter)
+                        if c in self.editable_flag_columns:
+                            item.setFlags(item.flags() | Qt.ItemIsEditable)
                     else:
                         # Sort key is the raw SQL value: ISO YYYY-MM-DD strings
                         # sort correctly as strings, numerics sort numerically,
@@ -678,6 +685,39 @@ class ComplianceView(SQLTableView):
         return deadline_urgency(row[5])  # cape_liq_deadline column
 
 
+class FlagDelegate(QStyledItemDelegate):
+    """Y / N / blank dropdown editor for INTEGER 0/1 flag cells.
+
+    The combo's userData stores the raw int (1, 0, or None). On commit the
+    delegate calls back into the owning view's ``commit_flag_edit`` so the
+    write + audit_log round-trip stays in the view layer where it can update
+    the visible cell in place.
+    """
+    OPTIONS = [("", None), ("Yes", 1), ("No", 0)]
+
+    def __init__(self, view: ImportersView):
+        super().__init__(view)
+        self._view = view
+
+    def createEditor(self, parent, option, index):  # noqa: ARG002
+        combo = QComboBox(parent)
+        for label, value in self.OPTIONS:
+            combo.addItem(label, userData=value)
+        return combo
+
+    def setEditorData(self, editor: QComboBox, index):
+        item = self._view.table.item(index.row(), index.column())
+        current = getattr(item, "_sort_key", None) if item is not None else None
+        for i, (_lbl, val) in enumerate(self.OPTIONS):
+            if val == current:
+                editor.setCurrentIndex(i)
+                return
+        editor.setCurrentIndex(0)  # blank
+
+    def setModelData(self, editor: QComboBox, model, index):  # noqa: ARG002
+        self._view.commit_flag_edit(index.row(), index.column(), editor.currentData())
+
+
 class ImportersView(SQLTableView):
     title = "Importers"
     headers = [
@@ -686,7 +726,18 @@ class ImportersView(SQLTableView):
     ]
     placeholder = "Filter by importer name or number..."
     flag_columns = [2, 3, 4, 5, 6]  # Self Filer, ACE, ACH, 4811 Client, PSC
+    editable_flag_columns = [2, 3, 4, 5, 6]
     status_filters = _importer_filters()
+
+    # Maps the editable column index to the importer_status field name.
+    # Kept in lockstep with `headers` and `flag_columns` above.
+    FLAG_COLUMN_FIELDS = {
+        2: "self_filer",
+        3: "ace_account",
+        4: "ach_details_in_ace",
+        5: "is_4811_client",
+        6: "psc_for_4811",
+    }
 
     def __init__(self, parent=None):
         # Importers don't belong to a single DIV (they can ship through multiple
@@ -694,6 +745,14 @@ class ImportersView(SQLTableView):
         # active in this DIV" via EXISTS against entries.
         self.status_filters = list(type(self).status_filters) + [_div_filter_spec()]
         super().__init__(parent)
+        # Override the base class's NoEditTriggers so flag cells can open
+        # their dropdown editor on double-click or F2.
+        self.table.setEditTriggers(
+            QTableWidget.DoubleClicked | QTableWidget.EditKeyPressed
+        )
+        self._flag_delegate = FlagDelegate(self)
+        for col in self.editable_flag_columns:
+            self.table.setItemDelegateForColumn(col, self._flag_delegate)
 
     def build_query(self, filter_text, status_filters):
         sql = (
@@ -716,6 +775,55 @@ class ImportersView(SQLTableView):
         sql, params = _apply_importer_filters(sql, params, status_filters)
         sql += f"ORDER BY i.importer_name ASC LIMIT {self.row_limit}"
         return sql, tuple(params)
+
+    def commit_flag_edit(self, row: int, col: int, new_value) -> None:
+        """Persist a single flag edit, log it, and patch the cell in place.
+
+        Patches the cell rather than re-running the query so the user keeps
+        their scroll position, sort order, and current selection. The
+        last_synced_at column is also updated in-memory so the displayed
+        value stays consistent with what's now in the DB.
+        """
+        field = self.FLAG_COLUMN_FIELDS.get(col)
+        if field is None:
+            return
+        key_item = self.table.item(row, 0)
+        if key_item is None:
+            return
+        importer_number = (key_item.text() or "").strip()
+        if not importer_number:
+            return
+        try:
+            conn = db.connect()
+            db.init_db(conn)
+            try:
+                db.update_importer_flag(
+                    conn, importer_number, field, new_value, auth.current_user(),
+                )
+            finally:
+                conn.close()
+        except Exception as e:
+            self.status.setText(f"Save failed: {e}")
+            return
+
+        cell = self.table.item(row, col)
+        if cell is not None:
+            self.table.blockSignals(True)
+            try:
+                cell.setText(format_flag(new_value))
+                cell._sort_key = new_value
+            finally:
+                self.table.blockSignals(False)
+        synced_cell = self.table.item(row, 7)  # Last Synced
+        if synced_cell is not None:
+            ts = db.now_iso()
+            self.table.blockSignals(True)
+            try:
+                synced_cell.setText(format_cell(ts))
+                synced_cell._sort_key = ts
+            finally:
+                self.table.blockSignals(False)
+        self.status.setText(f"Saved {field} for {importer_number}")
 
 
 # ===========================================================================

@@ -119,6 +119,87 @@ def test_upsert_claims_inserts_then_updates(tmp_db):
     assert err == "RESOLVED"
 
 
+def _seed_importer(conn, importer_number="12-3456789", **flags):
+    """Insert a minimal importer_status row for the flag-edit tests."""
+    cols = ["importer_number", "importer_name", "self_filer", "ace_account",
+            "ach_details_in_ace", "is_4811_client", "psc_for_4811", "last_synced_at"]
+    values = [importer_number, "ACME INC",
+              flags.get("self_filer"), flags.get("ace_account"),
+              flags.get("ach_details_in_ace"), flags.get("is_4811_client"),
+              flags.get("psc_for_4811"), db.now_iso()]
+    conn.execute(
+        f"INSERT INTO importer_status ({', '.join(cols)}) "
+        f"VALUES ({', '.join(['?'] * len(cols))})",
+        values,
+    )
+
+
+def test_update_importer_flag_writes_value_and_audit_log(tmp_db):
+    _seed_importer(tmp_db, self_filer=0)
+    changed = db.update_importer_flag(
+        tmp_db, "12-3456789", "self_filer", 1, "DMUSA\\hpayne",
+    )
+    assert changed is True
+
+    val = tmp_db.execute(
+        "SELECT self_filer FROM importer_status WHERE importer_number = ?",
+        ("12-3456789",),
+    ).fetchone()[0]
+    assert val == 1
+
+    row = tmp_db.execute(
+        "SELECT user_id, table_name, row_key, field, old_value, new_value "
+        "FROM audit_log WHERE table_name = 'importer_status'"
+    ).fetchone()
+    assert row[0] == "DMUSA\\hpayne"
+    assert row[2] == "12-3456789"
+    assert row[3] == "self_filer"
+    assert row[4] == "0"
+    assert row[5] == "1"
+
+
+def test_update_importer_flag_handles_null_transitions(tmp_db):
+    """NULL → 1 logs old=NULL, then 1 → NULL logs new=NULL."""
+    _seed_importer(tmp_db)  # all flags NULL
+    db.update_importer_flag(tmp_db, "12-3456789", "ace_account", 1, "u")
+    db.update_importer_flag(tmp_db, "12-3456789", "ace_account", None, "u")
+    rows = tmp_db.execute(
+        "SELECT old_value, new_value FROM audit_log "
+        "WHERE table_name = 'importer_status' AND field = 'ace_account' "
+        "ORDER BY id"
+    ).fetchall()
+    assert [(r[0], r[1]) for r in rows] == [(None, "1"), ("1", None)]
+
+
+def test_update_importer_flag_noop_skips_audit_log(tmp_db):
+    _seed_importer(tmp_db, is_4811_client=1)
+    changed = db.update_importer_flag(
+        tmp_db, "12-3456789", "is_4811_client", 1, "u",
+    )
+    assert changed is False
+    n = tmp_db.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE table_name = 'importer_status'"
+    ).fetchone()[0]
+    assert n == 0
+
+
+def test_update_importer_flag_rejects_unknown_field(tmp_db):
+    _seed_importer(tmp_db)
+    with pytest.raises(ValueError, match="Unknown importer flag field"):
+        db.update_importer_flag(tmp_db, "12-3456789", "importer_name", 1, "u")
+
+
+def test_update_importer_flag_rejects_bad_value(tmp_db):
+    _seed_importer(tmp_db)
+    with pytest.raises(ValueError, match="Flag value must be"):
+        db.update_importer_flag(tmp_db, "12-3456789", "self_filer", 2, "u")
+
+
+def test_update_importer_flag_rejects_unknown_importer(tmp_db):
+    with pytest.raises(ValueError, match="No importer_status row"):
+        db.update_importer_flag(tmp_db, "99-9999999", "self_filer", 1, "u")
+
+
 def test_upsert_entries_basic(tmp_db):
     rows = [
         {"entry_summary_number": "60500000010",

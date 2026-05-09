@@ -366,6 +366,59 @@ def upsert_entries(conn: sqlite3.Connection, rows: list[dict]) -> tuple[int, int
     return inserted, updated
 
 
+IMPORTER_FLAG_FIELDS = (
+    "self_filer", "ace_account", "ach_details_in_ace",
+    "is_4811_client", "psc_for_4811",
+)
+
+
+def update_importer_flag(
+    conn: sqlite3.Connection,
+    importer_number: str,
+    field: str,
+    new_value: int | None,
+    user_id: str,
+) -> bool:
+    """Update one Y/N flag on an importer_status row, log it, refresh last_synced_at.
+
+    `field` is whitelisted against IMPORTER_FLAG_FIELDS to keep the f-string
+    interpolation injection-safe. `new_value` must be 0, 1, or None (blank).
+
+    Returns True if a write happened, False if old==new (no-op, nothing logged).
+    Raises ValueError on unknown field/value/importer.
+    """
+    if field not in IMPORTER_FLAG_FIELDS:
+        raise ValueError(f"Unknown importer flag field: {field}")
+    if new_value not in (None, 0, 1):
+        raise ValueError(f"Flag value must be 0, 1, or None (got {new_value!r})")
+    ts = now_iso()
+    with transaction(conn):
+        existing = conn.execute(
+            f"SELECT {field} FROM importer_status WHERE importer_number = ?",
+            (importer_number,),
+        ).fetchone()
+        if existing is None:
+            raise ValueError(f"No importer_status row for {importer_number!r}")
+        old_value = existing[0]
+        if old_value == new_value:
+            return False
+        conn.execute(
+            f"UPDATE importer_status SET {field} = ?, last_synced_at = ? "
+            "WHERE importer_number = ?",
+            (new_value, ts, importer_number),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (user_id, table_name, row_key, field, "
+            " old_value, new_value, changed_at) "
+            "VALUES (?, 'importer_status', ?, ?, ?, ?, ?)",
+            (user_id, importer_number, field,
+             None if old_value is None else str(old_value),
+             None if new_value is None else str(new_value),
+             ts),
+        )
+    return True
+
+
 def _unwrap_excel(value):
     """Strip Excel's ``="..."`` text-format wrapper. Used by the cleanup helper
     below to fix rows ingested before claims_csv_ingest learned to unwrap."""
