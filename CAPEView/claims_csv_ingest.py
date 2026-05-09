@@ -157,7 +157,6 @@ def process_inbox(inbox: Path, processed: Path | None = None) -> dict:
 
     conn = db.connect()
     db.init_db(conn)
-    audit_baseline = _audit_status_count(conn)
 
     for f in files:
         started = db.now_iso()
@@ -181,7 +180,6 @@ def process_inbox(inbox: Path, processed: Path | None = None) -> dict:
             logger.exception("Failed to ingest %s", f.name)
 
     conn.close()
-    _maybe_send_digest(summary, audit_baseline)
     return summary
 
 
@@ -213,7 +211,6 @@ def process_single_file(src: Path, inbox: Path | None = None) -> dict:
     conn = db.connect()
     db.init_db(conn)
     started = db.now_iso()
-    audit_baseline = _audit_status_count(conn)
     try:
         rows = parse_csv(target)
         inserted, updated = db.upsert_claims(conn, rows)
@@ -234,63 +231,7 @@ def process_single_file(src: Path, inbox: Path | None = None) -> dict:
         logger.exception("Drop-zone failed to ingest %s", target.name)
     finally:
         conn.close()
-    _maybe_send_digest(summary, audit_baseline)
     return summary
-
-
-def _audit_status_count(conn) -> int:
-    """Return the current count of csv_ingest audit_log rows for the status
-    field. Used as a baseline before/after an ingest cycle so the digest
-    hook can detect status changes without relying on timestamp precision."""
-    return conn.execute(
-        "SELECT COUNT(*) FROM audit_log "
-        "WHERE user_id = 'csv_ingest' AND field = 'status'"
-    ).fetchone()[0]
-
-
-def _maybe_send_digest(summary: dict, audit_baseline: int) -> None:
-    """Send the Compliance digest after a successful ingest if email is enabled.
-
-    Fires only when **Compliance state actually changed** in this cycle —
-    i.e. ``upsert_claims`` wrote at least one new ``audit_log`` row tagged
-    ``user_id='csv_ingest'`` with ``field='status'`` between the cycle's
-    start (``audit_baseline``) and now. That covers (a) status transitions
-    on existing claims AND (b) brand-new claims inserted in a Failed state
-    (upsert_claims writes an explicit NULL→Failed audit row for those —
-    see ``cape_database.upsert_claims``).
-
-    Comparing audit_log row counts (rather than timestamps) sidesteps the
-    second-precision races that would otherwise cause back-to-back
-    no-change ingests to appear to "change" Compliance.
-
-    Never raises — a digest-send failure must not fail the ingest.
-    """
-    if (summary.get("inserted", 0) + summary.get("updated", 0)) == 0:
-        return
-    try:
-        from CAPEView import email_digest
-        from CAPEView.version import get_version
-        conn = db.connect()
-        try:
-            db.init_db(conn)
-            new_status_changes = _audit_status_count(conn) - audit_baseline
-            if new_status_changes <= 0:
-                logger.info(
-                    "Compliance state unchanged this cycle (no new audit_log "
-                    "status entries since baseline); skipping digest"
-                )
-                return
-            result = email_digest.send_compliance_digest(conn, get_version())
-        finally:
-            conn.close()
-        if result.get("sent"):
-            logger.info("Compliance digest sent to %s (%d rows)",
-                        ", ".join(result.get("recipients", [])),
-                        result.get("rows", 0))
-        elif result.get("error"):
-            logger.warning("Compliance digest skipped: %s", result["error"])
-    except Exception:
-        logger.exception("Compliance digest hook crashed; ingest result unaffected")
 
 
 def watch(inbox: Path, interval_seconds: int = 60):

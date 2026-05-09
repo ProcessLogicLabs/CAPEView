@@ -308,11 +308,11 @@ def upsert_claims(conn: sqlite3.Connection, rows: list[dict]) -> tuple[int, int]
                      row.get("error_description"), ts, ts),
                 )
                 # If the brand-new claim arrives in a Failed state, log it as
-                # a status transition (NULL -> Failed). This makes the
-                # NEW REJECTS dashboard card and the email-digest hook see
-                # newly-inserted rejects without needing a separate "scan
-                # claims.first_seen" query (which had timestamp-precision
-                # races at second granularity).
+                # a status transition (NULL -> Failed). The NEW REJECTS
+                # dashboard card reads from audit_log; without this row
+                # newly-inserted rejects would only be findable via a
+                # claims.first_seen scan (which races on second-precision
+                # timestamps).
                 new_status = row.get("status")
                 if new_status and str(new_status).strip().upper() == "FAILED":
                     conn.execute(

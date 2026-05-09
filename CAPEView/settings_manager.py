@@ -27,6 +27,10 @@ from typing import Any
 
 DEFAULT_SETTINGS_PATH = Path.home() / "AppData" / "Local" / "CAPEView" / "settings.json"
 
+# Keys that older CAPEView versions wrote and current code no longer reads.
+# Removed on first load post-upgrade so settings.json doesn't grow stale data.
+DEPRECATED_KEYS = ("email.enabled", "email.recipients")
+
 
 def settings_path() -> Path:
     env = os.environ.get("CAPEVIEW_SETTINGS_PATH")
@@ -39,6 +43,21 @@ class SettingsManager:
     def __init__(self, path: Path | str | None = None):
         self.path = Path(path) if path else settings_path()
         self._data: dict[str, Any] = self._load()
+        self._purge_deprecated_keys()
+
+    def _purge_deprecated_keys(self) -> None:
+        """Drop keys from removed features and rewrite the file once."""
+        removed = [k for k in DEPRECATED_KEYS if k in self._data]
+        if not removed:
+            return
+        for k in removed:
+            self._data.pop(k, None)
+        try:
+            self.save()
+        except OSError:
+            # Read-only filesystem etc. — safe to ignore; keys are already
+            # gone from this in-memory copy and the next start will retry.
+            pass
 
     def _load(self) -> dict[str, Any]:
         if not self.path.exists():

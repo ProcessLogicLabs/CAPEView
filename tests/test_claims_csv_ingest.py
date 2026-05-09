@@ -176,10 +176,10 @@ def test_no_audit_log_on_unchanged_row(tmp_path, isolated_db):
     """Re-ingesting an identical row adds no NEW audit_log entries.
 
     Note: a brand-new Failed claim writes one audit_log row at insert time
-    (NULL -> Failed transition) so the email digest hook can detect newly
-    arrived rejects. The test intent is "subsequent re-ingests don't keep
-    adding entries" — so the count after both ingests should equal the
-    count after just the first ingest.
+    (NULL -> Failed transition) so the NEW REJECTS dashboard card can find
+    newly-arrived rejects. The test intent is "subsequent re-ingests don't
+    keep adding entries" — so the count after both ingests should equal
+    the count after just the first ingest.
     """
     inbox = tmp_path / "inbox"
     inbox.mkdir()

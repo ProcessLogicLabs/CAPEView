@@ -49,6 +49,29 @@ def test_settings_corrupt_file_falls_back(isolated):
     assert s.all() == {}
 
 
+def test_settings_purges_deprecated_email_keys_on_load(isolated):
+    """Settings written by older versions (email.enabled / email.recipients)
+    are stripped on first load and the file is rewritten without them."""
+    import json
+    p = Path(isolated) / "settings.json"
+    p.write_text(json.dumps({
+        "database.path": "/some/where.db",
+        "email.enabled": True,
+        "email.recipients": ["a@b.com"],
+    }), encoding="utf-8")
+
+    s = SettingsManager()
+    assert s.get("email.enabled") is None
+    assert s.get("email.recipients") is None
+    assert s.get("database.path") == "/some/where.db"
+
+    # File on disk no longer carries the dead keys
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert "email.enabled" not in on_disk
+    assert "email.recipients" not in on_disk
+    assert on_disk["database.path"] == "/some/where.db"
+
+
 def test_resolve_db_path_env_wins(isolated, monkeypatch):
     target = isolated / "from_env.db"
     monkeypatch.setenv("CAPEVIEW_DB_PATH", str(target))
